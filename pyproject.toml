@@ -1,13 +1,9 @@
+# 依赖统一在 backend/pyproject.toml 管理，虚拟环境为 backend/.venv
+# 本文件只保留项目元信息，不再声明任何依赖
+# uv 命令统一在 backend/ 目录下执行：uv add / uv sync / uv run
+
 [project]
 name = "rag-knowledge-base"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = [
-    "alembic>=1.20.0",
-    "asyncpg>=0.32.0",
-    "cos-python-sdk-v5>=1.9.44",
-    "fastapi>=0.143.2",
-    "pydantic-settings>=2.16.0",
-    "python-dotenv>=1.2.4",
-    "sqlalchemy[asyncio]>=2.1.4",
-]
+dependencies = []
