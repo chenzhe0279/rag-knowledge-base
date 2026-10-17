@@ -42,6 +42,25 @@ class Settings(BaseSettings):
         # 外层 bool() 负责把结果统一转换成 True 或 False。
         return bool(self.cos_secret_id and self.cos_secret_key and self.cos_bucket)
 
+    cors_origins: str = "http://localhost:5173"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        result = []
+        # 1. 把原始的字符串按逗号分割成列表
+        parts = self.cors_origins.split(",")
+
+        # 2. 遍历每一个部分
+        for o in parts:
+            # 3. 去掉首尾的空白字符（比如空格、换行）
+            clean_o = o.strip()
+
+            # 4. 如果去掉空格后不是空字符串，就加入结果
+            if clean_o:
+                result.append(clean_o)
+
+        return result
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
