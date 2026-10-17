@@ -61,6 +61,30 @@ class Settings(BaseSettings):
 
         return result
 
+    # ===== Embedding (DashScope OpenAI 兼容协议) =====
+    embedding_api_key: str = ""
+    # 阿里云 DashScope 提供的 OpenAI 兼容模式接口地址，允许我们使用标准的 OpenAI SDK 去调用通义千问的向量化模型
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_model: str = "text-embedding-v3"
+    # 向量维度（决定了存入数据库的向量数组长度）。
+    # 警告：这个维度必须与数据库（如 PostgreSQL 的 pgvector 扩展）建表时定义的 Vector(N) 维度完全一致！
+    # 如果以后需要修改维度，必须通过 Alembic 编写迁移脚本，重新创建并同步这张表。
+    embedding_dim: int = 1024
+    # 向量化批处理大小。由于 API 通常有单次请求的数据量/Token 限制，不能一次性把整本书传过去，
+    # 这里设置为 10，表示每次请求处理 10 个文本块，避免触发限流或超时报错。
+    embedding_batch_size: int = 10
+
+    # ===== 文档上传与切分 =====
+    # 允许用户上传的单个文件最大体积（单位：MB）。
+    # 超过此大小将拒绝上传，防止过大的文件导致服务器内存溢出或处理超时。
+    upload_max_size_mb: int = 50
+    # 文本切分块大小 (Chunk Size)。将长文档切分成小段，600 代表每个文本块大约包含 600 个字符/Token。
+    # 这个值需要权衡：太大可能导致检索不准且超出模型上下文，太小可能导致语义被截断。
+    chunk_size: int = 600
+    # 文本切分重叠大小 (Chunk Overlap)。相邻两个文本块之间重叠的字符数（60）。
+    # 作用是防止重要的句子或语义恰好被切断在 chunk_size 的边界处，保留上下文连贯性。
+    chunk_overlap: int = 60
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
