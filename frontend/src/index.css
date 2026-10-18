@@ -1,0 +1,158 @@
+:root {
+  --font-sans:
+    'Inter', 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui,
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', 'Cascadia Code', 'SFMono-Regular', Consolas,
+    'Liberation Mono', monospace;
+
+  --bg: #f3f5f0;
+  --surface: rgba(255, 255, 255, 0.78);
+  --surface-solid: #ffffff;
+  --text: #25302a;
+  --text-strong: #0c1712;
+  --text-muted: #647169;
+  --text-faint: #8a958e;
+  --border: rgba(20, 40, 30, 0.1);
+  --border-strong: rgba(20, 40, 30, 0.17);
+  --accent: #0f766e;
+  --accent-strong: #115e59;
+  --on-accent: #f4fffc;
+  --accent-soft: rgba(15, 118, 110, 0.1);
+  --success: #087a55;
+  --success-soft: rgba(8, 122, 85, 0.1);
+  --danger: #b93a35;
+  --danger-soft: rgba(185, 58, 53, 0.1);
+  --warning: #986208;
+  --warning-soft: rgba(152, 98, 8, 0.12);
+  --pending: #506a80;
+  --pending-soft: rgba(80, 106, 128, 0.1);
+  --glow-teal: rgba(15, 118, 110, 0.12);
+  --glow-blue: rgba(37, 99, 235, 0.07);
+  --grid-dot: rgba(18, 50, 38, 0.075);
+  --shadow:
+    0 1px 2px rgba(14, 30, 23, 0.04),
+    0 24px 60px -32px rgba(14, 30, 23, 0.28);
+  --shadow-soft:
+    0 1px 2px rgba(14, 30, 23, 0.04),
+    0 14px 36px -26px rgba(14, 30, 23, 0.32);
+  --radius-lg: 22px;
+  --radius-md: 14px;
+
+  color-scheme: light dark;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c1210;
+    --surface: rgba(20, 29, 25, 0.78);
+    --surface-solid: #151f1b;
+    --text: #d7e1db;
+    --text-strong: #f1f7f3;
+    --text-muted: #97a49d;
+    --text-faint: #718078;
+    --border: rgba(215, 240, 226, 0.1);
+    --border-strong: rgba(215, 240, 226, 0.18);
+    --accent: #5eead4;
+    --accent-strong: #99f6e4;
+    --on-accent: #042f2a;
+    --accent-soft: rgba(94, 234, 212, 0.12);
+    --success: #4ade80;
+    --success-soft: rgba(74, 222, 128, 0.11);
+    --danger: #fb7185;
+    --danger-soft: rgba(251, 113, 133, 0.11);
+    --warning: #fbbf24;
+    --warning-soft: rgba(251, 191, 36, 0.11);
+    --pending: #93c5fd;
+    --pending-soft: rgba(147, 197, 253, 0.1);
+    --glow-teal: rgba(45, 212, 191, 0.1);
+    --glow-blue: rgba(96, 165, 250, 0.08);
+    --grid-dot: rgba(180, 240, 210, 0.055);
+    --shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 28px 64px -32px rgba(0, 0, 0, 0.85);
+    --shadow-soft:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 18px 40px -28px rgba(0, 0, 0, 0.8);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 10% -10%, var(--glow-teal), transparent 38%),
+    radial-gradient(circle at 94% 2%, var(--glow-blue), transparent 34%),
+    radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size:
+    auto,
+    auto,
+    28px 28px;
+  background-attachment: fixed;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a {
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
