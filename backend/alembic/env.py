@@ -10,8 +10,7 @@ from alembic import context
 from app.core.config import settings
 from app.db.base import Base
 
-import app.db  # noqa: F401 导入包即注册所有 ORM 模型
-
+from app.db import models # noqa: F401让 autogenerate 能扫到所有 ORM 模型
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
