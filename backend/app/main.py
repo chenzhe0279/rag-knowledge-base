@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 
 from app.api.error_handlers import register_error_handlers
-from app.api.routes import health
+from app.api.routes import health, documents
 from app.core.config import settings
 from app.core.logger import configure_logging, get_logger
 
@@ -47,6 +47,7 @@ def create_app() -> FastAPI:
     # 这里将 health.py 中的 router 挂载到 /api 路径下
     # 因此 health.py 中定义的 "/health" 最终访问路径为 "/api/health"
     app.include_router(health.router, prefix="/api")
+    app.include_router(documents.router, prefix="/api")
 
     # 7. 记录一条应用初始化成功的日志（使用 %s 占位符延迟字符串拼接，提高性能）
     logger.info("app initialized：%s", settings.app_name)
