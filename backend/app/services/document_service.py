@@ -57,6 +57,8 @@ THUMBNAIL_MAX_UPLOAD_MB = 10  # 缩略图上传上限
 THUMBNAIL_MAX_UPLOAD_BYTES = THUMBNAIL_MAX_UPLOAD_MB * 1024 * 1024  # 转字节
 _THUMBNAIL_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}  # 允许后缀
 
+MAX_DOCUMENT_NAME_LENGTH = 255  # 与前端一致
+_INVALID_NAME_CHARS = frozenset('\\/:*?"<>|')  # Windows 非法字符
 
 def _resolve_mime_and_suffix(file: UploadFile) -> tuple[str, str]:
     """根据 UploadFile 的 content_type 和扩展名共同判定。
@@ -246,7 +248,10 @@ class DocumentService:
         # 【设计考量】：因为 DB 已经 commit，如果 COS 删除失败，只会抛出异常/打日志，
         # 但 DB 记录已经删了。用户端看到的就是“删除成功”。
         # 这样做虽然会留下极少数“孤儿文件”（浪费一点存储空间），但保证了用户交互体验和主数据的强一致性。
+        thumbnail_key = doc.thumbnail_object_key  # 先保存 key
         await self.file_service.delete(object_key)
+        if thumbnail_key is not None:  # 有缩略图
+            await self.file_service.delete(thumbnail_key)  # 删除缩略图
 
         # 7. 记录操作日志，方便追踪和审计
         logger.info("document deleted: id=%s", document_id)
@@ -416,4 +421,64 @@ class DocumentService:
         await self.session.refresh(document)
 
         # 14. 返回更新后的完整文档对象。
+        return document
+
+    # 定义异步方法，用于重命名指定的文档。
+    # 传入参数：文档 ID 和新的文件名。
+    async def rename(self, document_id: UUID, new_name: str) -> Document:
+        # 1. 先根据 ID 查询文档，确认文档是否存在。
+        # 如果不存在，底层的 get 方法会抛出 NotFoundError (404)。
+        document = await self.get(document_id)
+
+        # 2. 清理用户输入：去掉字符串首尾的空格和不可见字符。
+        cleaned = new_name.strip()
+
+        # 3. 校验空名称：如果清理后为空字符串，拒绝修改。
+        if not cleaned:
+            raise ValidationError("文件名不能为空")
+
+        # 4. 校验长度限制：防止文件名过长导致数据库字段溢出或操作系统报错。
+        if len(cleaned) > MAX_DOCUMENT_NAME_LENGTH:
+            raise ValidationError(
+                f"文件名不能超过 {MAX_DOCUMENT_NAME_LENGTH} 个字符"
+            )
+
+        # 5. 校验特殊路径名：禁止使用 "." 或 ".."，防止路径遍历漏洞（Path Traversal）。
+        if cleaned in {".", ".."}:
+            raise ValidationError("文件名不能是 . 或 ..")
+
+        # 6. 校验非法字符：禁止包含 Windows/Linux 文件系统中不兼容的字符（如 \ / : * ? " < > |）。
+        if any(char in _INVALID_NAME_CHARS for char in cleaned):
+            raise ValidationError('文件名不能包含 \\ / : * ? " < > |')
+
+        # 7. 校验控制字符：如果包含 ASCII 码小于 32 的字符（如换行符、制表符、空字符），拒绝修改。
+        if any(ord(char) < 32 for char in cleaned):
+            raise ValidationError("文件名不能包含控制字符")
+
+        # 8. 校验结尾字符：禁止以句点或空格结尾（Windows 系统不允许这种文件名，容易导致创建文件失败）。
+        if cleaned.endswith((".", " ")):
+            raise ValidationError("文件名不能以句点或空格结尾")
+
+        # 9. 提取原始文件名和后缀，以及用户输入的新后缀。
+        old_suffix = PurePath(document.name).suffix
+        new_suffix = PurePath(cleaned).suffix
+
+        # 10. 校验后缀一致性：禁止用户通过重命名修改文件扩展名（如把 .pdf 改成 .exe），防止系统解析错误或安全风险。
+        if new_suffix != old_suffix:
+            raise ValidationError("不允许修改文件扩展名")
+
+        # 11. 幂等性处理：如果用户输入的新名字和旧名字完全一样，直接返回当前对象，避免无意义的数据库写入。
+        if cleaned == document.name:
+            return document
+
+        # 12. 执行重命名：将文档实体的 name 属性更新为清理后的新名称。
+        document.name = cleaned
+
+        # 13. 提交数据库事务，将新名称持久化保存。
+        await self.session.commit()
+
+        # 14. 刷新对象状态：从数据库重新读取最新数据，同步 updated_at 等自动更新的字段。
+        await self.session.refresh(document)
+
+        # 15. 返回更新后的文档对象。
         return document

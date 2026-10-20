@@ -11,7 +11,7 @@ from app.api.schemas.documents import (
     DocumentChunkStats,
     DocumentListResponse,
     DocumentRead,
-    DocumentStatusValue,
+    DocumentStatusValue, DocumentRenameRequest,
 )
 from app.db.models import DocumentStatus
 from app.services.document_service import DocumentService
@@ -264,3 +264,10 @@ async def get_document_thumbnail(document_id: UUID,  session: DbSession) -> Resp
             "Content-Disposition": "inline",  # 浏览器内显示
         },
     )
+
+
+@router.patch(  "/{document_id}", response_model=DocumentRead, operation_id="renameDocument")
+async def rename_document(  document_id: UUID, payload: DocumentRenameRequest, session: DbSession, ) -> DocumentRead:  # 返回类型
+    service = DocumentService(session)  # 服务
+    document = await service.rename(document_id, payload.name)  # 处理
+    return DocumentRead.model_validate(document)  # 转 Pydantic
