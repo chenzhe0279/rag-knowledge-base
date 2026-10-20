@@ -323,8 +323,11 @@ export function DocumentDetailPage({
         <RenameDocumentDialog
           document={document}
           onClose={() => setRenameOpen(false)}
-          onRenamed={() => {
+          onSaved={() => {
             setRenameOpen(false)
+            refresh()
+          }}
+          onDocumentUpdated={() => {
             refresh()
           }}
         />

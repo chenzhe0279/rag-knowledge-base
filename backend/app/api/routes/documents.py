@@ -271,3 +271,17 @@ async def rename_document(  document_id: UUID, payload: DocumentRenameRequest, s
     service = DocumentService(session)  # 服务
     document = await service.rename(document_id, payload.name)  # 处理
     return DocumentRead.model_validate(document)  # 转 Pydantic
+
+
+@router.put( "/{document_id}/thumbnail",response_model=DocumentRead,operation_id="uploadDocumentThumbnail")
+async def upload_document_thumbnail(
+    document_id: UUID,
+    session: DbSession,
+    file: UploadFile = File(  # multipart/form-data 上传的文件
+        ...,  # 必填
+        description="缩略图文件 (PDF / JPG / JPEG / PNG / WebP，最大 10MB)",  # Swagger 说明
+    ),
+) -> DocumentRead:  # 返回 Pydantic 响应模型
+    service = DocumentService(session)  # 创建业务服务
+    document = await service.upload_thumbnail(document_id, file)  # 处理、上传 COS、写回数据库
+    return DocumentRead.model_validate(document)  # ORM 对象转 Pydantic 响应

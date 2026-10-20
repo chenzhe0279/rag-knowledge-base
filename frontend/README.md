@@ -40,6 +40,7 @@ npm run dev
 - 文档以知识卡片形式展示：首页缩略图、文件类型、状态、大小和更新时间
 - 缩略图加载失败或后端尚未生成时，自动回退到带文件类型的渐变占位图
 - 支持重命名文档：固定扩展名，校验空白名称、长度、非法字符
+- 重命名弹窗可同时上传缩略图：支持 PDF、JPG、JPEG、PNG、WebP，最大 10 MB
 - 拖拽或点击选择文件，上传后自动打开文档详情
 - 按文档状态筛选：上传中 / 解析中 / 向量化中 / 已就绪 / 处理失败
 - 分页浏览；处理中的文档会每 3 秒自动刷新状态
@@ -65,8 +66,9 @@ npm run dev
 | --- | --- | --- | --- |
 | 文档库 | `GET` | `/api/documents` | 分页、按状态筛选文档 |
 | 文档库 | `POST` | `/api/documents` | 上传文档（multipart/form-data） |
-| 文档库 | `PATCH` | `/api/documents/{id}` | 重命名文档（body: `{"name": "新名称.ext"}`，待后端实现） |
-| 文档库 | `GET` | `/api/documents/{id}/thumbnail` | 首页缩略图（WebP，待后端实现） |
+| 文档库 | `PATCH` | `/api/documents/{id}` | 重命名文档（body: `{"name": "新名称.ext"}`） |
+| 文档库 | `GET` | `/api/documents/{id}/thumbnail` | 首页缩略图（WebP） |
+| 文档库 | `PUT` | `/api/documents/{id}/thumbnail` | 上传/替换缩略图（multipart/form-data） |
 | 文档详情 | `GET` | `/api/documents/{id}` | 文档详情与状态轮询 |
 | 文档详情 | `DELETE` | `/api/documents/{id}` | 删除文档 |
 | 文档详情 | `POST` | `/api/documents/{id}/retry` | 重试失败文档 |

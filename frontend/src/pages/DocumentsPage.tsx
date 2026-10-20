@@ -303,8 +303,12 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
         <RenameDocumentDialog
           document={renameTarget}
           onClose={() => setRenameTarget(null)}
-          onRenamed={(updated) => {
+          onSaved={(updated) => {
             setRenameTarget(null)
+            replaceDocument(updated)
+          }}
+          onDocumentUpdated={(updated) => {
+            setRenameTarget(updated)
             replaceDocument(updated)
           }}
         />

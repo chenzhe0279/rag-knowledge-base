@@ -289,7 +289,50 @@ export async function renameDocument(
   return payload as DocumentRead
 }
 
-export async function uploadDocument(file: File): Promise<DocumentRead> {  const formData = new FormData()
+/** 手动上传/替换文档缩略图；后端会转成 WebP 并返回最新文档。 */
+export async function uploadDocumentThumbnail(
+  documentId: string,
+  file: File,
+): Promise<DocumentRead> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  let response: Response
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/thumbnail`,
+      {
+        method: 'PUT',
+        headers: { Accept: 'application/json' },
+        body: formData,
+      },
+    )
+  } catch {
+    throw new DocumentsApiError('无法连接后端服务，请确认服务已启动')
+  }
+
+  const payload: unknown = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new DocumentsApiError(
+      extractApiErrorMessage(payload, fallbackMessage(response.status)),
+      response.status,
+    )
+  }
+
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    typeof (payload as DocumentRead).id !== 'string'
+  ) {
+    throw new DocumentsApiError('缩略图上传接口返回的数据结构不符合预期')
+  }
+
+  return payload as DocumentRead
+}
+
+export async function uploadDocument(file: File): Promise<DocumentRead> {
+  const formData = new FormData()
   formData.append('file', file)
 
   let response: Response
