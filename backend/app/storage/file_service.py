@@ -1,5 +1,5 @@
 from qcloud_cos import CosClientError, CosServiceError
-
+from uuid import UUID
 from app.core.logger import get_logger
 from app.storage.cos_client import CosClient, get_cos_client
 
@@ -82,6 +82,15 @@ class FileService:
             # 为什么这么做？因为删除文件往往是“尽力而为”的操作。
             # 比如用户删除了数据库记录，此时去删 COS 文件失败了，不应该让整个删除接口报错，只需记日志人工排查即可。
             logger.warning("cos delete failed: key=%s, err=%s", object_key, exc)
+
+    async def upload_thumbnail(self, document_id: UUID, content: bytes) -> str:  # 上传缩略图
+        key = f"thumbnails/{document_id}.webp"  # 固定 key，替换时覆盖旧图
+        await self._cos.put_object(  # 调用 COS
+            key=key,  # 对象键
+            body=content,  # WebP 图片字节
+            content_type="image/webp",  # 告诉浏览器这是 WebP
+        )
+        return key  # 返回 key，交给数据库保存
 
 def get_file_service() -> FileService:
     return FileService()

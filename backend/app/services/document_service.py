@@ -26,6 +26,9 @@ _ACCEPTED_MIME_TYPES: dict[str, str] = {
     "text/x-markdown": ".md",
     "text/html": ".html",
     "application/xhtml+xml": ".html",
+    # ===== 新增 PPTX 和 XLSX =====
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
 }
 
 # 后缀白名单
@@ -37,6 +40,9 @@ _ACCEPTED_SUFFIXES: dict[str, str] = {
     ".markdown": "text/markdown",
     ".html": "text/html",
     ".htm": "text/html",
+    # ===== 新增 PPTX 和 XLSX =====
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 # 删除允许的状态：终态 + uploading（uploading 时后台任务还没真正写 chunks）
@@ -70,7 +76,7 @@ def _resolve_mime_and_suffix(file: UploadFile) -> tuple[str, str]:
     # 4. 如果后缀和 MIME 都不在白名单中，抛出业务异常（拦截恶意文件或格式不兼容文件）
     raise ValidationError(
         f"不支持的文件类型：{file.filename}（{mime or '未知'}）。"
-        "当前仅支持 PDF、DOCX、Markdown、HTML"
+         "当前仅支持 PDF、DOCX、PPTX、XLSX、Markdown、HTML"
     )
 
 

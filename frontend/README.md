@@ -1,41 +1,92 @@
 # RAG Knowledge Base · 前端
 
-基于 **React 19 + TypeScript + Vite 8** 的前端工程，首页以三张状态卡片展示后端健康检查结果。
+基于 **React 19 + TypeScript 5.9 + Vite 8** 的知识库控制台，包含文档管理、Markdown 预览、文本块查看和系统健康检查。
+
+## 技术栈
+
+- **React 19 + TypeScript 5.9**，Vite 8 构建
+- **react-markdown + remark-gfm**：渲染 Markdown 原文，支持 GFM 表格、任务列表与代码块
+- **openapi-typescript**：从后端 OpenAPI 文档生成精确的接口类型
+- **openapi-fetch**：基于生成类型构建类型安全的 API 客户端
+- Oxlint 静态检查
 
 ## 快速开始
 
-```bash
-# 1. 安装依赖
+> 首次启动或后端接口发生变化后，需要先生成一次前端类型。
+
+```powershell
+# 1. 启动后端（新终端）
+cd ..\backend
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+
+# 2. 回到前端目录安装依赖
+cd ..\frontend
 npm install
 
-# 2. 启动开发服务器（默认 http://localhost:5173）
+# 3. 从正在运行的后端生成 API 类型（需要 backend 已启动）
+npm run gen:api
+
+# 4. 启动开发服务器（默认 http://localhost:5173）
 npm run dev
 ```
 
-首页会自动请求以下三个接口，请求失败时可在卡片中单独重试：
+后端启动后可以访问 `http://127.0.0.1:8000/docs` 查看 Swagger 文档。开发环境下 `/api` 请求由 Vite 代理到 `http://127.0.0.1:8000`，不涉及浏览器跨域。
 
-| 卡片 | 后端接口 | 检查内容 |
-| --- | --- | --- |
-| 后端服务 | `GET /api/health` | FastAPI 进程与路由是否可用 |
-| PostgreSQL | `GET /api/health/db` | 执行 `SELECT 1` 验证数据库连接 |
-| 腾讯云 COS | `GET /api/health/cos` | 校验 COS 凭据与存储桶连通性 |
+## 功能
 
-开发环境下 `/api` 请求由 Vite 代理到 `http://127.0.0.1:8000`，因此不涉及浏览器跨域。
+### 文档库
 
-## 启动后端
+- 上传 PDF、DOCX、PPTX、XLSX、Markdown、HTML，单文件上限 50 MB
+- 文档以知识卡片形式展示：首页缩略图、文件类型、状态、大小和更新时间
+- 缩略图加载失败或后端尚未生成时，自动回退到带文件类型的渐变占位图
+- 支持重命名文档：固定扩展名，校验空白名称、长度、非法字符
+- 拖拽或点击选择文件，上传后自动打开文档详情
+- 按文档状态筛选：上传中 / 解析中 / 向量化中 / 已就绪 / 处理失败
+- 分页浏览；处理中的文档会每 3 秒自动刷新状态
+- 失败文档支持重新处理，处理中的文档禁止删除
 
-```powershell
-cd ..\backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
-```
+### 文档详情
 
-或使用 uv：
+- **Markdown 预览**：拉取原始 `.md` 文件，由 `react-markdown` + `remark-gfm` 渲染
+- **PDF / HTML 预览**：使用 iframe；HTML 在沙箱中运行，脚本不会执行
+- **DOCX / PPTX / XLSX**：浏览器无法内联渲染，提供下载入口
+- 展示文件大小、状态、哈希和上传/更新时间
+- **文本块**：查看切分统计、分页列表、chunk 摘要及完整内容
+- 下载原始文件、重新处理失败文档、删除文档（带二次确认）
+
+### 系统状态
+
+- 三个独立健康检查卡片：后端 API、PostgreSQL、腾讯云 COS
+- 支持单卡重试和全部刷新，展示响应耗时、检测时间和错误原因
+
+## 后端接口
+
+| 页面 | 方法 | 接口 | 用途 |
+| --- | --- | --- | --- |
+| 文档库 | `GET` | `/api/documents` | 分页、按状态筛选文档 |
+| 文档库 | `POST` | `/api/documents` | 上传文档（multipart/form-data） |
+| 文档库 | `PATCH` | `/api/documents/{id}` | 重命名文档（body: `{"name": "新名称.ext"}`，待后端实现） |
+| 文档库 | `GET` | `/api/documents/{id}/thumbnail` | 首页缩略图（WebP，待后端实现） |
+| 文档详情 | `GET` | `/api/documents/{id}` | 文档详情与状态轮询 |
+| 文档详情 | `DELETE` | `/api/documents/{id}` | 删除文档 |
+| 文档详情 | `POST` | `/api/documents/{id}/retry` | 重试失败文档 |
+| 文档详情 | `GET` | `/api/documents/{id}/file?download=0` | 原始文件预览 |
+| 文档详情 | `GET` | `/api/documents/{id}/chunks` | 文本块分页与统计 |
+| 文档详情 | `GET` | `/api/documents/{id}/chunks/{chunk_id}` | 单个文本块完整内容 |
+| 系统状态 | `GET` | `/api/health`、`/api/health/db`、`/api/health/cos` | 依赖健康检查 |
+
+## 同步后端类型
+
+`src/types/schema.d.ts` 由后端 OpenAPI 规范自动生成，已加入 `.gitignore`，不提交到仓库。
 
 ```bash
-uv run uvicorn app.main:app --reload --port 8000
+# 先保证后端运行在 127.0.0.1:8000
+npm run gen:api
 ```
 
-后端启动后可以访问 `http://127.0.0.1:8000/docs` 查看 Swagger 文档。
+- 后端新增/修改接口后重新执行即可。
+- `npm run build` 依赖该文件；新克隆项目或 CI 环境需要在构建前启动后端并执行 `gen:api`。
+- `openapi-typescript` 当前 peer 依赖 TypeScript 5.x，因此项目 TypeScript 固定为 5.9.x。
 
 ## 配置
 
@@ -51,10 +102,9 @@ API_PROXY_TARGET=http://127.0.0.1:8000
 
 - **开发环境**：保持 `VITE_API_BASE_URL` 为空，由 Vite 代理解决跨域。
 - **生产部署**：如果前端与后端不同源，将 `VITE_API_BASE_URL` 设置为后端地址（例如 `https://api.example.com`），并把该地址加入后端 `.env` 的 `CORS_ORIGINS`。
+- `npm run gen:api` 默认从 `http://127.0.0.1:8000/openapi.json` 拉取；如后端地址不同，请修改 `package.json` 中的脚本地址。
 
-### 状态说明
-
-卡片根据接口返回的 `status` 字段展示：
+### 健康状态说明
 
 - `ok`：正常
 - `error`：接口可访问，但依赖服务异常（例如数据库连接失败）
@@ -65,6 +115,7 @@ API_PROXY_TARGET=http://127.0.0.1:8000
 
 ```bash
 npm run dev       # 启动开发服务器
+npm run gen:api   # 从后端 OpenAPI 重新生成类型（需要后端运行）
 npm run build     # TypeScript 类型检查 + 生产构建
 npm run preview   # 预览生产构建产物
 npm run lint      # Oxlint 静态检查
@@ -75,15 +126,16 @@ npm run lint      # Oxlint 静态检查
 ```
 frontend/
 ├─ src/
-│  ├─ api/            # 健康检查请求封装
-│  ├─ components/     # 状态卡片与图标
-│  ├─ data/           # 三个检查项的元数据
-│  ├─ hooks/          # 并行检测与刷新逻辑
-│  ├─ lib/            # 状态展示映射、格式化工具
-│  ├─ types/          # 健康接口类型定义
-│  ├─ App.tsx         # 首页
-│  ├─ App.css
-│  └─ index.css
-├─ vite.config.ts     # /api 开发代理
+│  ├─ api/              # 健康检查、文档 API 与 openapi-fetch 客户端
+│  ├─ components/       # 状态卡片、上传弹窗、Markdown 预览、通用 UI
+│  ├─ data/             # 健康检查项元数据
+│  ├─ hooks/            # 健康检查、文档列表/详情轮询
+│  ├─ lib/              # 状态映射、文件类型、格式化工具
+│  ├─ pages/            # 文档库、文档详情、系统状态
+│  ├─ types/            # 健康/文档类型；schema.d.ts 由 gen:api 生成
+│  ├─ App.tsx           # 应用外壳与视图切换
+│  ├─ App.css           # 通用布局、导航、按钮、弹窗
+│  └─ index.css         # 主题变量与全局样式
+├─ vite.config.ts       # /api 开发代理
 └─ .env.example
 ```

@@ -24,6 +24,7 @@ class DocumentRead(BaseModel):
     file_hash: str  # 文件的 SHA256 哈希值
     mime_type: str  # 文件 MIME 类型
     size: int  # 文件大小（字节）
+    thumbnail_url: str | None = None  # 缩略图地址；没有则为 None
     status: DocumentStatusValue  # 当前处理状态（强类型约束）
     error_message: str | None = None  # 错误信息（可选，默认为 None）
     created_at: datetime  # 创建时间
@@ -158,3 +159,10 @@ class DocumentChunkDetail(BaseModel):
             chunk_hash=chunk.chunk_hash,
             created_at=chunk.created_at,
         )
+
+class DocumentRenameRequest(BaseModel):  # 重命名请求体
+    name: str = Field(  # 新文件名，包含扩展名
+        min_length=1,  # 至少 1 个字符
+        max_length=255,  # 最多 255 个字符
+        description="新的文件名，必须保留原扩展名",  # Swagger 说明
+    )

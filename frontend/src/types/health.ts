@@ -1,19 +1,22 @@
-/** 后端健康检查接口返回的状态值。 */
-export const HEALTH_STATUSES = ['ok', 'error', 'not_configured'] as const
+import type { components } from './schema'
 
-export type HealthStatus = (typeof HEALTH_STATUSES)[number]
+/** 健康检查接口响应，直接复用 OpenAPI 生成的类型。 */
+export type HealthResponse = components['schemas']['HealthStatus']
 
-/** `GET /api/health*` 的统一响应结构。 */
-export interface HealthResponse {
-  status: HealthStatus
-  detail?: string | null
-}
+export type HealthStatus = HealthResponse['status']
+
+/** 运行时校验用的状态值列表，类型上确保与 OpenAPI 定义保持一致。 */
+export const HEALTH_STATUSES = [
+  'ok',
+  'error',
+  'not_configured',
+] as const satisfies readonly HealthStatus[]
 
 export type ServiceId = 'api' | 'db' | 'cos'
 
 export type ServiceIconName = 'server' | 'database' | 'cloud'
 
-/** 首页一张状态卡片对应的后端检查项。 */
+/** 状态卡片对应的后端检查项。 */
 export interface ServiceDefinition {
   id: ServiceId
   name: string

@@ -68,7 +68,8 @@ class Document(Base):
     cos_object_key: Mapped[str] = mapped_column(String(512), nullable=False)
     # 存储桶所在地域（如 ap-guangzhou）
     cos_region: Mapped[str] = mapped_column(String(64), nullable=False)
-
+    # 文档缩略图的存储路径
+    thumbnail_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # ===== 状态机相关 =====
     # 文档当前的解析状态（关联定义的 DocumentStatus 枚举：uploading, parsing, indexing, ready, failed）
     # 默认状态是“刚上传完毕 (UPLOADING)”
@@ -98,6 +99,13 @@ class Document(Base):
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", passive_deletes=True
     )
+
+    @property
+    def thumbnail_url(self) -> str | None:  # 返回给前端的缩略图地址
+        if self.thumbnail_object_key is None:  # 没有缩略图
+            return None  # 前端显示占位图
+        return f"/api/documents/{self.id}/thumbnail"  # 用文档 id 拼出稳定地址
+    
 
 class DocumentChunk(Base):
     # 表名：存放文档被切分后的文本块（Chunks）
