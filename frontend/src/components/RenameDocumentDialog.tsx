@@ -372,11 +372,16 @@ function CurrentThumbnailPreview({ document }: { document: DocumentRead }) {
   const kind = getDocumentKind(document)
   const label = getDocumentKindLabel(kind)
   const thumbnailUrl = document.thumbnail_url
+    ? withCacheKey(
+        resolveApiAssetUrl(document.thumbnail_url),
+        document.updated_at,
+      )
+    : null
 
   if (thumbnailUrl && !failed) {
     return (
       <img
-        src={resolveApiAssetUrl(thumbnailUrl)}
+        src={thumbnailUrl}
         alt="当前缩略图"
         onError={() => setFailed(true)}
       />
@@ -384,4 +389,9 @@ function CurrentThumbnailPreview({ document }: { document: DocumentRead }) {
   }
 
   return <span className="rename-thumbnail__glyph">{label}</span>
+}
+
+function withCacheKey(url: string, version: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}v=${encodeURIComponent(version)}`
 }

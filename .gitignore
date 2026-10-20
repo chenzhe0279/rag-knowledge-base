@@ -17,8 +17,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -114,3 +114,7 @@ celerybeat.pid
 
 # Alembic 本地配置（如有）
 alembic.ini.local
+
+# Docling 模型与 HuggingFace 下载缓存
+backend/artifacts/
+backend/.hf-cache/
