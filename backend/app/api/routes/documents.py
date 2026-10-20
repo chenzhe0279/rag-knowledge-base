@@ -251,3 +251,16 @@ async def get_document_chunk(document_id: UUID,  chunk_id: UUID,  session: DbSes
     # 因为在转换过程中，可能需要处理 None 值（比如计算字符数）或者组装特殊字段，
     # 使用工厂方法能更灵活地控制数据转换逻辑。
     return DocumentChunkDetail.from_orm_chunk(chunk)
+
+@router.get("/{document_id}/thumbnail", operation_id="getDocumentThumbnail")
+async def get_document_thumbnail(document_id: UUID,  session: DbSession) -> Response:  # 返回二进制
+    service = DocumentService(session)  # 服务
+    content = await service.get_thumbnail(document_id)  # 读取字节
+    return Response(  # 构造响应
+        content=content,  # 图片字节
+        media_type="image/webp",  # MIME
+        headers={  # 响应头
+            "Cache-Control": "private, max-age=86400",  # 缓存一天
+            "Content-Disposition": "inline",  # 浏览器内显示
+        },
+    )

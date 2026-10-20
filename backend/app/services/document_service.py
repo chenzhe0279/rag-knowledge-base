@@ -16,6 +16,8 @@ from app.db.repositories.chunk_repo import (
 from app.db.repositories.document_repo import DocumentRepository
 from app.ingestion.pipeline import ingest_document
 from app.storage.file_service import FileService, get_file_service
+import asyncio
+from app.ingestion.thumbnail import generate_manual_thumbnail
 
 # 受支持的 MIME 类型
 # 字典结构：{ MIME类型 : 标准后缀 }，用于进行文件安全白名单校验
@@ -49,6 +51,12 @@ _ACCEPTED_SUFFIXES: dict[str, str] = {
 _DELETABLE_STATUSES = frozenset(
     {DocumentStatus.READY, DocumentStatus.FAILED, DocumentStatus.UPLOADING}
 )
+
+
+THUMBNAIL_MAX_UPLOAD_MB = 10  # 缩略图上传上限
+THUMBNAIL_MAX_UPLOAD_BYTES = THUMBNAIL_MAX_UPLOAD_MB * 1024 * 1024  # 转字节
+_THUMBNAIL_SUFFIXES = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}  # 允许后缀
+
 
 def _resolve_mime_and_suffix(file: UploadFile) -> tuple[str, str]:
     """根据 UploadFile 的 content_type 和扩展名共同判定。
@@ -322,3 +330,90 @@ class DocumentService:
 
         # 返回找到的文本块对象
         return chunk
+
+    async def get_thumbnail(self, document_id: UUID) -> bytes:  # 读取缩略图
+        document = await self.get(document_id)  # 文档不存在抛 404
+        if document.thumbnail_object_key is None:  # 没有缩略图
+            raise NotFoundError("缩略图不存在")  # 404
+        return await self.file_service.download(document.thumbnail_object_key)
+
+    # 定义异步方法，用于处理用户手动上传的缩略图（支持图片或 PDF 第一页）。
+    # 传入参数：文档 ID 和用户上传的文件对象。
+    async def upload_thumbnail(self, document_id: UUID, file: UploadFile) -> Document:
+        # 1. 先根据 ID 查询文档，确认文档存在。
+        # 如果不存在，底层的 get 方法会直接抛出 NotFoundError (404)。
+        document = await self.get(document_id)
+
+        # 2. 获取文件名。如果用户上传的文件没有文件名（极端情况），用 "thumbnail" 兜底。
+        filename = file.filename or "thumbnail"
+
+        # 3. 提取文件后缀并统一转为小写（如 .JPG 转为 .jpg）。
+        suffix = PurePath(filename).suffix.lower()
+
+        # 4. 校验后缀是否在白名单内（白名单包含 PDF 和常见图片格式）。
+        if suffix not in _THUMBNAIL_SUFFIXES:
+            # 如果不支持，抛出 400 参数校验异常。
+            raise ValidationError(
+                "缩略图仅支持 PDF、JPG、JPEG、PNG、WebP"
+            )
+
+        # 5. 异步读取上传文件的完整二进制内容到内存中。
+        content = await file.read()
+
+        # 6. 校验空文件。如果文件大小为 0，直接拒绝。
+        if not content:
+            raise ValidationError("缩略图文件为空")
+
+        # 7. 校验文件大小。超过配置的限制（如 5MB）直接拒绝，防止恶意大文件攻击。
+        if len(content) > THUMBNAIL_MAX_UPLOAD_BYTES:
+            raise ValidationError(
+                f"缩略图不能超过 {THUMBNAIL_MAX_UPLOAD_MB} MB"
+            )
+
+        # 8. 进入核心处理逻辑，使用 try 块包裹以捕获可能的异常。
+        try:
+            # 因为图片解码、PDF渲染是极度消耗CPU的同步操作，
+            # 使用 asyncio.to_thread 丢入后台线程执行，避免阻塞事件循环。
+            # 使用 asyncio.wait_for 设置 90 秒超时，防止处理死循环卡死服务器。
+            webp = await asyncio.wait_for(
+                asyncio.to_thread(
+                    generate_manual_thumbnail,  # 底层处理函数
+                    filename,  # 文件名
+                    content,  # 文件内容
+                ),
+                timeout=90,
+            )
+
+        # 捕获底层处理函数主动抛出的 ValueError（如：图片像素过大、格式损坏等）。
+        except ValueError as exc:
+            # 将内部的 ValueError 转化为 FastAPI 的 ValidationError (400)，并原样抛出错误信息。
+            raise ValidationError(str(exc)) from exc
+
+        # 捕获其他所有未预期的异常（如内存溢出、Pillow底层报错等）。
+        except Exception as exc:
+            # 使用 logger.exception 记录完整的异常堆栈日志，方便后端排查。
+            logger.exception(
+                "manual thumbnail failed: document_id=%s",
+                document_id,
+            )
+            # 向外抛出一个对用户友好的、不包含技术细节的错误提示。
+            raise ValidationError("缩略图处理失败，请换一张图片或 PDF") from exc
+
+        # 9. 防御性判断：如果处理函数没报错，但没返回图片数据（理论不该发生）。
+        if not webp:
+            raise ValidationError("缩略图生成失败")
+
+        # 10. 将生成的 WebP 字节流上传到云存储（如 COS），返回云端的 object_key（存储路径）。
+        key = await self.file_service.upload_thumbnail(document.id, webp)
+
+        # 11. 将云存储的 key 赋值给当前文档实体的缩略图字段。
+        document.thumbnail_object_key = key
+
+        # 12. 提交数据库事务，将新的缩略图 key 永久保存到数据库。
+        await self.session.commit()
+
+        # 13. 刷新对象状态。确保获取到数据库自动生成的最新 update_time 等字段，返回给前端。
+        await self.session.refresh(document)
+
+        # 14. 返回更新后的完整文档对象。
+        return document

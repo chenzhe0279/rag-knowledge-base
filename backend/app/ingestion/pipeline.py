@@ -7,6 +7,9 @@ from app.db.repositories.document_repo import DocumentRepository
 from app.db.session import AsyncSessionLocal
 from app.ingestion import embedder, parser, splitter
 from app.storage.file_service import get_file_service
+import asyncio
+from pathlib import Path
+from app.ingestion.thumbnail import generate_thumbnail
 
 logger = get_logger(__name__)
 
@@ -32,6 +35,78 @@ async def _set_status(document_id: UUID, status: DocumentStatus, *,error_message
         # 提交后，前端（如果正在轮询查进度）立刻就能查到最新的 status。
         await session.commit()
 
+
+# 定义内部异步函数，用于生成并附加文档的缩略图。
+# 传入参数：文档 ID、原始文件名、原始文件字节流。
+async def _attach_thumbnail(document_id: UUID, filename: str, content: bytes) -> None:
+    # 防御性判断：如果文件后缀不是 PDF，直接跳过。
+    # 因为对于 DOCX/PPTX 等格式，生成缩略图的成本过高或暂不支持，交由前端展示默认图标。
+    if Path(filename).suffix.lower() != ".pdf":
+        return
+
+    # 开启异常捕获块。缩略图生成属于“锦上添花”的非核心功能，
+    # 绝对不能因为缩略图生成失败（如 PDF 损坏、超时、内存不足）而导致整个文档入库流程崩溃。
+    try:
+        # 【核心逻辑】由于 generate_thumbnail 是同步且极度消耗 CPU 的操作（Docling 解析 PDF 并渲染图片），
+        # 1. 使用 asyncio.to_thread 将其丢到后台线程池执行，避免阻塞主事件循环。
+        # 2. 使用 asyncio.wait_for 设置了 90 秒的超时限制。防止遇到极其复杂或异常的 PDF 时，线程被永久卡死。
+        thumbnail = await asyncio.wait_for(
+            asyncio.to_thread(generate_thumbnail, filename, content),
+            timeout=90,
+        )
+    # 捕获超时异常（TimeoutError）或其他任何生成过程中的异常。
+    except Exception as exc:
+        # 记录警告日志，记录文档 ID 和具体的错误原因，方便后续排查。
+        logger.warning(
+            "thumbnail generation skipped: document_id=%s err=%s",
+            document_id,
+            exc,
+        )
+        # 发生异常直接返回，放弃生成缩略图，继续执行后续主流程。
+        return
+
+    # 如果生成函数没有抛出异常，但返回了 None（可能是非 PDF 或者内部静默失败了）。
+    if not thumbnail:
+        # 直接返回。
+        return
+
+    # 开启第二个异常捕获块。此时缩略图已经生成好了，接下来要上传云存储并写入数据库。
+    try:
+        # 1. 调用文件服务，将内存中的 WebP 缩略图字节流上传到云存储（如腾讯云 COS）。
+        # 返回一个 object_key（文件的云端存储路径）。
+        key = await get_file_service().upload_thumbnail(document_id, thumbnail)
+
+        # 2. 开启一个全新的、独立的数据库事务（短事务）。
+        # 使用 async with 保证连接用完后自动归还。
+        async with AsyncSessionLocal() as session:
+            # 实例化文档仓储层。
+            repo = DocumentRepository(session)
+
+            # 3. 将刚刚上传得到的缩略图 key，更新到数据库对应文档的字段中。
+            # 注意：返回的 updated 是一个布尔值，代表是否成功更新。
+            # 为什么会失败？因为在生成缩略图耗时（比如几十秒）的过程中，用户可能刚好把这个文档删除了。
+            updated = await repo.set_thumbnail_key(document_id, key)
+
+            # 4. 并发冲突处理：如果数据库更新失败（说明文档已被删除）。
+            if not updated:
+                # 【极其关键的清理逻辑】既然数据库里已经没有这条记录了，
+                # 那么刚才上传到云端的缩略图文件就成了“孤儿文件”（垃圾数据）。
+                # 必须立刻调用云存储接口将其删除，防止浪费存储空间和产生费用。
+                await get_file_service().delete(key)
+                # 处理完毕，直接返回。
+                return
+
+            # 5. 如果更新成功，提交事务，将缩略图 key 真正写入数据库。
+            await session.commit()
+
+    # 捕获上传或写库过程中的异常（如网络抖动、数据库连接断开等）。
+    except Exception as exc:
+        # 同样记录警告日志。缩略图附加失败不影响主文档的上传和解析。
+        logger.warning(
+            "thumbnail upload skipped: document_id=%s err=%s",
+            document_id,
+            exc,
+        )
 
 async def ingest_document(document_id: UUID) -> None:
     """执行完整入库流程。"""
@@ -117,6 +192,8 @@ async def ingest_document(document_id: UUID) -> None:
 
         # 所有步骤成功！将文档状态更新为 READY（可检索），并清空错误信息
         # 注意：这里调用 _set_status 会开启一个新的短事务，立刻 commit，前端能瞬间看到状态变更。
+        # PDF 生成缩略图
+        await _attach_thumbnail(document_id, filename, content)
         await _set_status(document_id, DocumentStatus.READY, error_message=None)
         logger.info("ingest done: document_id=%s, chunks=%d", document_id, len(chunks))
 

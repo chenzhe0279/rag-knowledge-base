@@ -115,3 +115,10 @@ class DocumentRepository:
         """
         # 标记该对象为待删除状态。在 flush/commit 时，数据库会执行 DELETE 语句。
         await self.session.delete(document)
+
+    async def set_thumbnail_key(self, document_id: UUID, object_key: str) -> bool:  # 写回 key
+        document = await self.get_by_id(document_id)  # 查文档
+        if document is None:  # 文档已被删除
+            return False  # 告诉调用方
+        document.thumbnail_object_key = object_key  # 修改属性
+        return True  # 由调用方提交
