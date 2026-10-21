@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react'
-import { BrandIcon, FileTextIcon, ServerIcon } from './components/Icons'
+import {
+  BrandIcon,
+  ChatIcon,
+  FileTextIcon,
+  ServerIcon,
+} from './components/Icons'
+import { ChatPage } from './pages/ChatPage'
 import { DocumentDetailPage } from './pages/DocumentDetailPage'
 import { DocumentsPage } from './pages/DocumentsPage'
 import { SystemStatusPage } from './pages/SystemStatusPage'
 import './App.css'
+import './theme.css'
 
-type AppView = 'documents' | 'status'
+type AppView = 'documents' | 'chat' | 'status'
 
 function App() {
   const [view, setView] = useState<AppView>('documents')
@@ -22,9 +29,19 @@ function App() {
     setSelectedDocumentId(null)
   }
 
+  const showChat = () => {
+    setView('chat')
+    setSelectedDocumentId(null)
+  }
+
   const showStatus = () => {
     setView('status')
     setSelectedDocumentId(null)
+  }
+
+  const openDocumentFromChat = (documentId: string) => {
+    setView('documents')
+    setSelectedDocumentId(documentId)
   }
 
   return (
@@ -61,6 +78,16 @@ function App() {
           <button
             type="button"
             className={
+              view === 'chat' ? 'main-nav__item is-active' : 'main-nav__item'
+            }
+            onClick={showChat}
+          >
+            <ChatIcon className="icon" />
+            知识问答
+          </button>
+          <button
+            type="button"
+            className={
               view === 'status' ? 'main-nav__item is-active' : 'main-nav__item'
             }
             onClick={showStatus}
@@ -76,25 +103,24 @@ function App() {
         </span>
       </header>
 
-      {view === 'status' ? (
-        <SystemStatusPage />
-      ) : selectedDocumentId ? (
+      {selectedDocumentId ? (
         <DocumentDetailPage
           documentId={selectedDocumentId}
           onBack={showDocuments}
           onDeleted={showDocuments}
         />
+      ) : view === 'chat' ? (
+        <ChatPage onOpenDocument={openDocumentFromChat} />
+      ) : view === 'status' ? (
+        <SystemStatusPage />
       ) : (
         <DocumentsPage onOpenDocument={setSelectedDocumentId} />
       )}
 
       <footer className="page-footer">
+        <p>RAG Knowledge Base · React + TypeScript + Vite</p>
         <p>
-          RAG Knowledge Base · React + TypeScript + Vite
-        </p>
-        <p>
-          类型由 <code>npm run gen:api</code> 从后端 OpenAPI 同步，开发环境经
-          Vite 代理访问 <code>http://127.0.0.1:8000</code>
+          SSE 流式问答 · 类型由 <code>npm run gen:api</code> 从后端 OpenAPI 同步
         </p>
       </footer>
     </div>
@@ -102,3 +128,4 @@ function App() {
 }
 
 export default App
+

@@ -1,11 +1,12 @@
 # RAG Knowledge Base · 前端
 
-基于 **React 19 + TypeScript 5.9 + Vite 8** 的知识库控制台，包含文档管理、Markdown 预览、文本块查看和系统健康检查。
+基于 **React 19 + TypeScript 5.9 + Vite 8** 的知识库控制台，包含文档管理、Markdown 预览、文本块查看、系统健康检查和 SSE 流式知识问答。
 
 ## 技术栈
 
 - **React 19 + TypeScript 5.9**，Vite 8 构建
-- **react-markdown + remark-gfm**：渲染 Markdown 原文，支持 GFM 表格、任务列表与代码块
+- **react-markdown + remark-gfm**：渲染 Markdown 原文与问答回答，支持 GFM 表格、任务列表与代码块
+- **@microsoft/fetch-event-source**：消费 FastAPI 的 SSE 流式问答
 - **openapi-typescript**：从后端 OpenAPI 文档生成精确的接口类型
 - **openapi-fetch**：基于生成类型构建类型安全的 API 客户端
 - Oxlint 静态检查
@@ -55,6 +56,15 @@ npm run dev
 - **文本块**：查看切分统计、分页列表、chunk 摘要及完整内容
 - 下载原始文件、重新处理失败文档、删除文档（带二次确认）
 
+### 知识问答
+
+- 基于已入库文档的 RAG 问答，回答通过 **SSE** 流式返回
+- 支持 `message_start`、`citations`、`token`、`message_end`、`error` 事件
+- 回答渲染 Markdown；引用按 `ordinal` 显示，点击可打开来源文档
+- 侧栏展示引用匹配度柱状图与来源排行
+- 会话 ID 保存在浏览器本地，刷新后可恢复历史消息
+- 支持停止生成、新建对话、Enter 发送 / Shift + Enter 换行
+
 ### 系统状态
 
 - 三个独立健康检查卡片：后端 API、PostgreSQL、腾讯云 COS
@@ -75,6 +85,9 @@ npm run dev
 | 文档详情 | `GET` | `/api/documents/{id}/file?download=0` | 原始文件预览 |
 | 文档详情 | `GET` | `/api/documents/{id}/chunks` | 文本块分页与统计 |
 | 文档详情 | `GET` | `/api/documents/{id}/chunks/{chunk_id}` | 单个文本块完整内容 |
+| 知识问答 | `POST` | `/api/conversations` | 创建会话（body: `{"title": "..."}`） |
+| 知识问答 | `GET` | `/api/conversations/{id}` | 会话详情与历史消息 |
+| 知识问答 | `POST` | `/api/conversations/{id}/chat` | SSE 流式问答（body: `{"question": "..."}`） |
 | 系统状态 | `GET` | `/api/health`、`/api/health/db`、`/api/health/cos` | 依赖健康检查 |
 
 ## 同步后端类型
