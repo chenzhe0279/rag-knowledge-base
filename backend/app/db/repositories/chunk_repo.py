@@ -4,8 +4,9 @@ from uuid import UUID
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.db.models import DocumentChunk
+from app.db.models import DocumentChunk, Document
 
 
 @dataclass(frozen=True)
@@ -159,3 +160,52 @@ class DocumentChunkRepository:
             min_length=int(row.min_len or 0),
             max_length=int(row.max_len or 0),
         )
+
+    # 定义异步方法：执行基于向量的检索
+    async def vector_search(
+            self,
+            # 用户的查询向量（通常是用户问题经过 Embedding 模型转化后的浮点数数组）
+            query_embedding: list[float],
+            # 需要返回的候选文本块数量（Top-K）
+            top_k: int,
+    ) -> list[tuple[DocumentChunk, float]]:
+        """按 cosine 距离做 Top-K 向量检索。
+
+        - 仅检索状态为 ready 的文档（避免拿到尚未完成入库的脏 chunk）
+        - 返回 (chunk, distance) 列表，distance 越小越相似（pgvector cosine_distance）
+        - 用 selectinload 把所属 Document 一并加载，方便上层直接读 document.name
+          而不会再去 N 次 lazy load 查询
+        """
+
+        # 构建 pgvector 特有的 SQL 表达式：计算数据库中 embedding 列与查询向量之间的余弦距离
+        distance = DocumentChunk.embedding.cosine_distance(query_embedding)
+
+        # 开始构建 SQLAlchemy 查询语句
+        stmt = (
+            # 选择 DocumentChunk 实体，同时将计算出的距离起个别名叫 "distance" 一起查出来
+            select(DocumentChunk, distance.label("distance"))
+            # 关联 Document 表（INNER JOIN），条件是 Document 的 id 等于 Chunk 的 document_id
+            .join(Document, Document.id == DocumentChunk.document_id)
+            # 过滤条件：只检索那些所属文档状态为 "ready"（已完成解析入库）的文本块
+            .where(Document.status == "ready")
+            # 排序规则：按距离升序排列（距离越小，说明语义越相似，排在越前面）
+            .order_by(distance.asc())
+            # 限制只取前 K 条
+            .limit(top_k)
+            # 预加载优化：当你把这一堆 DocumentChunk 查出来之后，请顺着每个 Chunk 身上叫 document 的那个属性，把关联的 Document 数据也一并给我捞出来
+            .options(selectinload(DocumentChunk.document))
+        )
+
+        # 执行查询，获取所有结果行（每一行是一个包含 Chunk 和 distance 的 Row 对象）
+        rows = (await self.session.execute(stmt)).all()
+
+        # 创建一个空列表，准备接收处理后的数据
+        result = []
+
+        # 遍历数据库返回的每一行结果
+        for chunk, dist in rows:
+            # 将对象和强转为 float 的距离值打包成元组，追加到结果列表中
+            result.append((chunk, float(dist)))
+
+        # 返回包含 (chunk, distance) 元组的列表
+        return result
