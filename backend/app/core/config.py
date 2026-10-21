@@ -85,6 +85,23 @@ class Settings(BaseSettings):
     # 作用是防止重要的句子或语义恰好被切断在 chunk_size 的边界处，保留上下文连贯性。
     chunk_overlap: int = 60
 
+    # ===== Chat 模型 (DashScope OpenAI 兼容协议) =====
+    # 默认与 embedding 同 base_url
+    chat_api_key: str = ""
+    # DeepSeek 官方 OpenAI 兼容协议的 Base URL
+    chat_base_url: str = "https://api.deepseek.com"
+    # 调用最新的 DeepSeek V4.1 Flash 模型
+    chat_model: str = "deepseek-flash"
+
+    # ===== 检索与问答 =====
+    # 检索 Top-K：交给 LLM 的候选 chunk 数量
+    retrieval_top_k: int = 5
+    # 拒答阈值：cosine similarity (= 1 - cosine_distance) 的下限
+    # Top-K 中最高分仍低于此值，直接拒答，不调 LLM
+    retrieval_min_score: float = 0.6
+    # 多轮窗口：load_context 节点取最近多少轮塞进 prompt
+    chat_history_window: int = 5
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

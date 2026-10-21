@@ -164,3 +164,179 @@ class DocumentChunk(Base):
     # 反向 ORM 关联：通过 chunk.document 可以直接拿到它所属的那个 Document 对象
     # relationship() 是 SQLAlchemy 中最核心、最强大的功能之一。简单来说，它是用来建立两个 Python 对象（模型）之间的“情感羁绊”的
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+class MessageRole(str, Enum):
+    """消息角色"""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+# 定义对话模型类，继承 SQLAlchemy 2.0 的基类 Base，对应数据库中的一张表
+class Conversation(Base):
+    # 指定该模型在数据库中对应的表名为 "conversations"
+    __tablename__ = "conversations"
+
+    # 主键 ID：使用 PostgreSQL 原生的 UUID 类型，默认自动生成 uuid4。
+    # 使用 UUID 而非自增整数更安全，防止恶意猜测 ID，且适合分布式环境。
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+
+    # 对话标题：限制最大长度 256，不允许为空。
+    # 设置 default="新对话" 使得用户刚创建会话时，即使没想好名字，也能有一个默认标题。
+    title: Mapped[str] = mapped_column(String(256), nullable=False, default="新对话")
+
+    # 开发备注：当前为单用户系统，未来引入多用户登录时，需在此添加 user_id 外键字段。
+    # user_id 后面引入用户体系时再加列
+
+    # 记录对话创建的时间戳
+    created_at: Mapped[datetime] = mapped_column(
+        # 使用带时区的 DateTime 类型；由数据库底层在插入时自动生成当前时间；不允许为空。
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # 记录对话最后一次更新的时间戳（如发新消息、修改标题时）
+    updated_at: Mapped[datetime] = mapped_column(
+        # 使用带时区的 DateTime 类型
+        DateTime(timezone=True),
+        # 创建记录时自动生成当前时间
+        server_default=func.now(),
+        # 核心魔法：每次该行数据发生更新时，数据库自动将这个字段刷新为最新的当前时间
+        onupdate=func.now(),
+        # 不允许为空
+        nullable=False,
+    )
+
+    # 建立一对多关联关系：一个对话包含多条消息 (Message)。
+    # 此属性不会在数据库生成真实字段，仅供 ORM 在 Python 层面查询和操作。
+    messages: Mapped[list["Message"]] = relationship(
+        # 双向绑定：告诉 ORM，Message 模型里也有一个属性叫 "conversation" 指回当前对话
+        back_populates="conversation",
+        # 级联删除：如果删除了当前对话，自动把该对话下的所有消息也一并删掉，防止产生孤儿数据
+        cascade="all, delete-orphan",
+        # 性能优化：删除时让数据库底层的外键级联（ON DELETE CASCADE）去执行，不在 Python 内存里逐个删
+        passive_deletes=True,
+        # 排序规则：当获取 messages 列表时，默认按照消息的创建时间升序排列（先发的在前）
+        order_by="Message.created_at",
+    )
+
+
+class Message(Base):
+    # 指定该模型在数据库中对应的表名为 "messages"
+    __tablename__ = "messages"
+
+    # 主键 ID：使用 PostgreSQL 原生的 UUID 类型，默认自动生成 uuid4。
+    # 使用 UUID 有利于分布式系统及防止主键被轻易猜测。
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+
+    # 所属对话的 ID：这是一个外键，将当前消息与 Conversation 表关联起来。
+    conversation_id: Mapped[UUID] = mapped_column(
+        # 指定类型为 UUID
+        PGUUID(as_uuid=True),
+        # 外键约束：关联到 conversations 表的 id 列。
+        # ondelete="CASCADE" 表示数据库层面的级联删除：当对应的 Conversation 被删除时，这条 Message 也会被数据库自动删除。
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        # 不允许为空，每条消息必须属于某个对话
+        nullable=False,
+        # 建立索引：因为经常会根据 conversation_id 查询该对话下的所有消息，加索引能极大提升查询速度
+        index=True,
+    )
+
+    # 消息角色：使用自定义的枚举类型 MessageRole（如 USER, ASSISTANT, SYSTEM），存为 16 长度的字符串。
+    # 不允许为空，每条消息必须明确是谁说的。
+    role: Mapped[MessageRole] = mapped_column(String(16), nullable=False)
+
+    # 消息内容：使用 Text 类型，可以存储极长的文本（如 AI 的长篇回复），不允许为空。
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 开发备注：预留扩展字段，未来可用于存储模型名称、消耗 token 数、延迟时间等跟踪信息。
+    # 扩展元数据：使用 JSONB 字段存储。注意在映射时，数据库列名叫 "metadata"（因为 mapped_column 的第一个参数指定了名字），
+    # 而 Python 属性名叫 extra_metadata 是为了避免和 SQLAlchemy 内部的保留属性 metadata 冲突。
+    # default=dict 确保在未提供该字段时，默认写入一个空字典 {}。不允许为空。
+    extra_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+
+    # 记录消息创建的时间戳
+    created_at: Mapped[datetime] = mapped_column(
+        # 使用带时区的 DateTime 类型；由数据库底层在插入时自动生成当前时间；不允许为空。
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # 建立多对一关系：多条消息对应一个对话。
+    # 此属性允许你通过 message.conversation 直接访问所属的 Conversation 对象。
+    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+    # 建立一对多关系：一条（AI 回答的）消息可能包含多个引用来源 (AnswerCitation)。
+    # 此属性允许你通过 message.citations 获取该消息所引用的文档片段列表。
+    citations: Mapped[list["AnswerCitation"]] = relationship(
+        # 双向绑定：让 AnswerCitation 模型中有一个属性指向当前消息
+        back_populates="message",
+        # 级联删除：如果当前消息被删除，自动删除所有依附于它的引用记录
+        cascade="all, delete-orphan",
+        # 性能优化：删除时依赖数据库底层的级联操作
+        passive_deletes=True,
+        # 排序规则：获取引用列表时，按 AnswerCitation 模型中的 ordinal 字段升序排列（通常代表在回答中引用的先后顺序）
+        order_by="AnswerCitation.ordinal",
+    )
+
+
+class AnswerCitation(Base):
+    """assistant 消息引用的 chunk 快照。
+
+    冗余 page_no / quote 作用：原 chunk 后续可能被增量索引覆盖或文档被删除，
+    历史会话仍要能展示当时的引用原文。
+    """
+
+    # 指定该模型在数据库中对应的表名为 "answer_citations"
+    __tablename__ = "answer_citations"
+
+    # 主键 ID：使用 PostgreSQL 原生的 UUID 类型，默认自动生成 uuid4
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+
+    # 所属消息的 ID：外键，指向 messages 表
+    message_id: Mapped[UUID] = mapped_column(
+        # 使用 UUID 类型
+        PGUUID(as_uuid=True),
+        # 关联 messages 表的主键。级联删除：如果对应的 Message 被删除，这条引用记录也会被数据库自动删掉
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        # 不允许为空，引用必须属于某条消息
+        nullable=False,
+        # 加索引：经常需要按 message_id 查询该消息的所有引用，加索引提升查询速度
+        index=True,
+    )
+
+    # prompt 中给 LLM 看到的「片段 N」编号，从 1 开始。
+    # 持久化下来才能保证刷新后引用顺序与 LLM 当时看到的一致（id 是随机 UUID 不能用来排序）
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # 原 chunk / 文档可能被删除，所以 ON DELETE SET NULL，保留快照
+    # 关联的原始文档 ID，外键指向 documents 表
+    document_id: Mapped[UUID | None] = mapped_column(
+        # 使用 UUID 类型
+        PGUUID(as_uuid=True),
+        # 关联 documents 表。SET NULL：如果原文档被删除了，这里的外键会被数据库自动置为 NULL，保留当前引用快照记录
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        # 允许为空（因为源文档可能已被删除）
+        nullable=True,
+    )
+
+    # 关联的原始文本块 ID，外键指向 document_chunks 表
+    chunk_id: Mapped[UUID | None] = mapped_column(
+        # 使用 UUID 类型
+        PGUUID(as_uuid=True),
+        # 关联 document_chunks 表。SET NULL：如果原文本块被删除了，外键置为 NULL
+        ForeignKey("document_chunks.id", ondelete="SET NULL"),
+        # 允许为空（因为源文本块可能被重新切分覆盖或删除）
+        nullable=True,
+    )
+
+    # 冗余存储的文档名称：防止源文档删除后，历史对话中不知道这段引用出自哪里。限制 512 字符，不允许为空。
+    document_name: Mapped[str] = mapped_column(String(512), nullable=False)
+
+    # 冗余存储的页码（可能为空，比如 HTML 文档没有页码）
+    page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # 冗余存储的引用原文（快照）：即使源 chunk 被修改或删除，这里依然保存着当时 LLM 引用的具体文字内容，使用 Text 类型，不允许为空。
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 建立多对一关系：多条引用快照对应一条 AI 消息。
+    # 与 Message 模型中的 citations 属性构成双向绑定。
+    message: Mapped[Message] = relationship(back_populates="citations")
