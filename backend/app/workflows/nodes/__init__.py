@@ -2,6 +2,7 @@ from app.workflows.nodes.generate import stream_generate
 from app.workflows.nodes.load_context import load_context
 from app.workflows.nodes.normalize_query import normalize_query
 from app.workflows.nodes.retrieve import retrieve
+from app.workflows.nodes.route_query import route_query
 
 # 定义 __all__ 变量
 # 作用 1：严格控制对外暴露的公共接口。当其他模块使用 `from app.workflows.nodes import *` 时，只会导入这个列表里列出的名字。
@@ -13,6 +14,8 @@ __all__ = [
     "normalize_query",
     # 执行向量检索的节点函数
     "retrieve",
+    # 执行查询路由的节点函数
+    "route_query",
     # 调用大模型流式生成回答的节点函数
     "stream_generate",
 ]
