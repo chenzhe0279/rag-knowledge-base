@@ -35,6 +35,13 @@ npm run dev
 
 ## 功能
 
+### 知识数据看板
+
+- 液态玻璃风格首页，包含趋势、榜首知识源、AI 洞察与最近沉淀
+- 玻璃胶囊菜单、光标光斑 / 3D 倾斜、共享布局详情、液态周期筛选与放大 Dock
+- 日 / 周 / 月切换时数字平滑滚动、图表柱体插值，不刷新页面
+- 主模块可原位展开为详情，其余模块收起为底部玻璃缩略条
+
 ### 文档库
 
 - 上传 PDF、DOCX、PPTX、XLSX、Markdown、HTML，单文件上限 50 MB
@@ -59,9 +66,12 @@ npm run dev
 ### 知识问答
 
 - 基于已入库文档的 RAG 问答，回答通过 **SSE** 流式返回
-- 支持 `message_start`、`citations`、`token`、`message_end`、`error` 事件
+- 支持 `message_start`、`query_route`、`citations`、`token`、`message_end`、`error` 事件
+- 查询路由调试：实时展示 `original` / `rewrite` / `hyde` / `multi_queries` 策略
+- 每条 assistant 消息可展开路由快照，查看原始问题、实际检索 Query、改写内容、HyDE 假设答案及多路子查询
+- 路由快照由后端持久化，刷新页面或恢复历史会话后仍可查看；旧消息无快照时自动隐藏
+- 侧栏展示当前查询路由策略、引用匹配度柱状图与来源排行
 - 回答渲染 Markdown；引用按 `ordinal` 显示，点击可打开来源文档
-- 侧栏展示引用匹配度柱状图与来源排行
 - 会话 ID 保存在浏览器本地，刷新后可恢复历史消息
 - 支持停止生成、新建对话、Enter 发送 / Shift + Enter 换行
 
@@ -141,13 +151,14 @@ npm run lint      # Oxlint 静态检查
 ```
 frontend/
 ├─ src/
-│  ├─ api/              # 健康检查、文档 API 与 openapi-fetch 客户端
-│  ├─ components/       # 状态卡片、上传弹窗、Markdown 预览、通用 UI
+│  ├─ api/              # 健康检查、文档 API、聊天 SSE 与 openapi-fetch 客户端
+│  ├─ components/       # 状态卡片、上传弹窗、查询路由调试面板、通用 UI
+│  ├─ dashboard/        # 液态玻璃数据看板、图表与 5 个高阶交互组件
 │  ├─ data/             # 健康检查项元数据
 │  ├─ hooks/            # 健康检查、文档列表/详情轮询
-│  ├─ lib/              # 状态映射、文件类型、格式化工具
-│  ├─ pages/            # 文档库、文档详情、系统状态
-│  ├─ types/            # 健康/文档类型；schema.d.ts 由 gen:api 生成
+│  ├─ lib/              # 状态映射、文件类型、查询路由元数据、格式化工具
+│  ├─ pages/            # 文档库、文档详情、知识问答、系统状态
+│  ├─ types/            # 健康/文档/聊天类型；schema.d.ts 由 gen:api 生成
 │  ├─ App.tsx           # 应用外壳与视图切换
 │  ├─ App.css           # 通用布局、导航、按钮、弹窗
 │  └─ index.css         # 主题变量与全局样式

@@ -8,6 +8,8 @@ import type {
   ChatStreamHandlers,
   ConversationDetail,
   ConversationRead,
+  QueryRoute,
+  QueryRouteValue,
 } from '../types/chat'
 
 export class ChatApiError extends Error {
@@ -124,13 +126,59 @@ function toCitation(citation: ChatCitation): ChatCitation {
   }
 }
 
+const QUERY_ROUTE_VALUES: QueryRouteValue[] = [
+  'original',
+  'rewrite',
+  'hyde',
+  'multi_queries',
+]
+
+/**
+ * SSE 与历史接口共用同一份 query_route 快照。
+ * 后端已做容错，前端仍对未知字段做一次防御，避免调试数据破坏聊天主流程。
+ */
+function toQueryRoute(input: unknown): QueryRoute | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const raw = input as Record<string, unknown>
+  if (
+    typeof raw.route !== 'string' ||
+    !QUERY_ROUTE_VALUES.includes(raw.route as QueryRouteValue) ||
+    typeof raw.query !== 'string'
+  ) {
+    return null
+  }
+
+  const rewrittenQuery =
+    typeof raw.rewritten_query === 'string' ? raw.rewritten_query : undefined
+  const hydeAnswer =
+    typeof raw.hyde_answer === 'string' ? raw.hyde_answer : undefined
+  const multiQueries = Array.isArray(raw.multi_queries)
+    ? raw.multi_queries.filter(
+        (query): query is string => typeof query === 'string',
+      )
+    : undefined
+
+  return {
+    route: raw.route as QueryRouteValue,
+    query: raw.query,
+    rewritten_query: rewrittenQuery,
+    hyde_answer: hydeAnswer,
+    multi_queries: multiQueries,
+  }
+}
+
 export function toChatMessage(message: ApiMessageRead): ChatMessage {
   return {
     id: message.id,
+    clientKey: message.id,
     role: message.role,
     content: message.content,
     created_at: message.created_at,
     citations: (message.citations ?? []).map(toCitation),
+    queryRoute: toQueryRoute(message.query_route),
   }
 }
 
@@ -149,7 +197,7 @@ function parseSseData(data: string): Record<string, unknown> {
  * 使用 @microsoft/fetch-event-source 消费后端的 SSE 流。
  *
  * 后端事件协议：
- * message_start -> citations -> token... -> message_end
+ * message_start -> query_route -> citations -> token... -> message_end
  * 任意阶段失败会发送 error 事件。
  */
 export async function streamChat(
@@ -210,6 +258,13 @@ export async function streamChat(
               })
             }
             break
+          case 'query_route': {
+            const queryRoute = toQueryRoute(payload)
+            if (queryRoute) {
+              handlers.onQueryRoute?.(queryRoute)
+            }
+            break
+          }
           case 'citations':
             handlers.onCitations?.(
               Array.isArray(payload.citations)

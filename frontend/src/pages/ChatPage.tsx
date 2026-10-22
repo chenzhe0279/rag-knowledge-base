@@ -12,10 +12,13 @@ import {
 import {
   ChatIcon,
   PlusIcon,
+  RouteIcon,
   SendIcon,
   SparkIcon,
   StopIcon,
 } from '../components/Icons'
+import { QueryRoutePanel } from '../components/QueryRoutePanel'
+import { QUERY_ROUTE_META } from '../lib/queryRoute'
 import { formatTime } from '../lib/format'
 import type {
   ChatCitation,
@@ -46,6 +49,18 @@ function timestamp(): string {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+function findOriginalQuestion(
+  messages: ChatMessage[],
+  assistantIndex: number,
+): string {
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      return messages[index].content
+    }
+  }
+  return ''
 }
 
 export function ChatPage({ onOpenDocument }: ChatPageProps) {
@@ -118,6 +133,10 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
     .reverse()
     .find((message) => message.role === 'assistant')
   const latestCitations = latestAssistant?.citations ?? []
+  const latestQueryRoute = latestAssistant?.queryRoute ?? null
+  const latestRouteMeta = latestQueryRoute
+    ? QUERY_ROUTE_META[latestQueryRoute.route]
+    : null
   const scores = latestCitations
     .map((citation) => citation.score)
     .filter((score): score is number => typeof score === 'number')
@@ -183,17 +202,21 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
       ...current,
       {
         id: userId,
+        clientKey: userId,
         role: 'user',
         content: question,
         created_at: createdAt,
         citations: [],
+        queryRoute: null,
       },
       {
         id: assistantId,
+        clientKey: assistantId,
         role: 'assistant',
         content: '',
         created_at: createdAt,
         citations: [],
+        queryRoute: null,
       },
     ])
     setInput('')
@@ -223,6 +246,15 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
               current.map((message) =>
                 message.id === userId
                   ? { ...message, id: user_message_id }
+                  : message,
+              ),
+            )
+          },
+          onQueryRoute: (queryRoute) => {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === assistantId
+                  ? { ...message, queryRoute }
                   : message,
               ),
             )
@@ -330,15 +362,25 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             <span>提问</span>
           </h1>
           <p className="hero__lead">
-            基于已入库文档进行检索与生成。回答会流式返回，并附上命中的原文片段与来源文档。
+            基于已入库文档进行检索与生成。查询路由会自动选择原查询、改写、HyDE
+            或多路检索策略，回答以 SSE 流式返回，并保留完整调试快照。
           </p>
         </div>
         <div className="chat-hero__aside">
           <span className="chat-live-pill">
             <span className="chat-live-pill__dot" aria-hidden="true" />
-            SSE 流式连接
+            SSE · QUERY ROUTING
           </span>
           <p>回答来自知识库检索，不脱离文档凭空生成。</p>
+          <div
+            className="chat-capability-chips"
+            aria-label="查询优化能力"
+          >
+            <span>Rewrite</span>
+            <span>HyDE</span>
+            <span>Multi-Query</span>
+            <span>Debug Snapshot</span>
+          </div>
         </div>
       </section>
 
@@ -364,6 +406,17 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 {latestCitations.length > 0
                   ? `${latestCitations.length} 个引用`
                   : '等待检索'}
+              </span>
+              <span
+                className="chat-route-meta"
+                title={
+                  latestRouteMeta
+                    ? latestRouteMeta.description
+                    : '发送问题后，后端会返回查询路由快照'
+                }
+              >
+                <RouteIcon className="icon" />
+                {latestRouteMeta ? latestRouteMeta.label : '等待查询路由'}
               </span>
             </div>
             <button
@@ -447,7 +500,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           </div>
 
           <p className="chat-rail__footnote">
-            `message_start → citations → token → message_end`
+            `message_start → query_route → citations → token → message_end`
             <br />
             由 FastAPI SSE 推送
           </p>
@@ -476,7 +529,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 <p className="chat-welcome__eyebrow">START A CONVERSATION</p>
                 <h2>从一份文档开始</h2>
                 <p>
-                  问一个具体问题，系统会先检索相关片段，再基于片段生成回答。每个引用都可以打开原文档。
+                  问一个具体问题，系统会自动选择查询路由并检索相关片段，再基于片段生成回答。每个引用都可以打开原文档，路由调试快照会随消息保留。
                 </p>
                 <div className="chat-suggestions">
                   {SUGGESTIONS.map((suggestion) => (
@@ -501,7 +554,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                   return (
                     <article
                       className={`chat-message chat-message--${message.role}`}
-                      key={message.id}
+                      key={message.clientKey}
                     >
                       <div className="chat-message__meta">
                         <span>{isAssistant ? '知识库助手' : '你'}</span>
@@ -522,7 +575,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                               <i />
                               <i />
                               <i />
-                              正在检索与组织回答
+                              {message.queryRoute
+                                ? `${
+                                    QUERY_ROUTE_META[message.queryRoute.route]
+                                      .label
+                                  } · 正在检索与组织回答`
+                                : '正在检索与组织回答'}
                             </span>
                           )
                         ) : (
@@ -532,6 +590,17 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                           <span className="chat-caret" aria-hidden="true" />
                         ) : null}
                       </div>
+
+                      {isAssistant && message.queryRoute ? (
+                        <QueryRoutePanel
+                          route={message.queryRoute}
+                          originalQuestion={findOriginalQuestion(
+                            messages,
+                            index,
+                          )}
+                          live={streaming && isLast}
+                        />
+                      ) : null}
 
                       {isAssistant && message.citations.length > 0 ? (
                         <div className="chat-message__sources">

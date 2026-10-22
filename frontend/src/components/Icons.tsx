@@ -247,4 +247,15 @@ export function DashboardIcon(props: IconProps) {
   )
 }
 
+export function RouteIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="5.5" cy="5.5" r="2.5" />
+      <circle cx="18.5" cy="18.5" r="2.5" />
+      <path d="M5.5 8v2.4a5.6 5.6 0 0 0 5.6 5.6h4.5" />
+      <path d="m13.5 13.5 2.5 2.5-2.5 2.5" />
+    </Icon>
+  )
+}
+
 
