@@ -1,21 +1,39 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   BrandIcon,
   ChatIcon,
+  DashboardIcon,
   FileTextIcon,
   ServerIcon,
 } from './components/Icons'
-import { ChatPage } from './pages/ChatPage'
-import { DocumentDetailPage } from './pages/DocumentDetailPage'
-import { DocumentsPage } from './pages/DocumentsPage'
-import { SystemStatusPage } from './pages/SystemStatusPage'
+import { Spinner } from './components/Spinner'
+import { DashboardPage } from './dashboard/DashboardPage'
 import './App.css'
 import './theme.css'
 
-type AppView = 'documents' | 'chat' | 'status'
+const ChatPage = lazy(() =>
+  import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })),
+)
+const DocumentDetailPage = lazy(() =>
+  import('./pages/DocumentDetailPage').then((module) => ({
+    default: module.DocumentDetailPage,
+  })),
+)
+const DocumentsPage = lazy(() =>
+  import('./pages/DocumentsPage').then((module) => ({
+    default: module.DocumentsPage,
+  })),
+)
+const SystemStatusPage = lazy(() =>
+  import('./pages/SystemStatusPage').then((module) => ({
+    default: module.SystemStatusPage,
+  })),
+)
+
+type AppView = 'dashboard' | 'documents' | 'chat' | 'status'
 
 function App() {
-  const [view, setView] = useState<AppView>('documents')
+  const [view, setView] = useState<AppView>('dashboard')
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     null,
   )
@@ -23,6 +41,11 @@ function App() {
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [view, selectedDocumentId])
+
+  const showDashboard = () => {
+    setView('dashboard')
+    setSelectedDocumentId(null)
+  }
 
   const showDocuments = () => {
     setView('documents')
@@ -44,6 +67,17 @@ function App() {
     setSelectedDocumentId(documentId)
   }
 
+  if (view === 'dashboard') {
+    return (
+      <DashboardPage
+        onNavigate={(destination) => {
+          setSelectedDocumentId(null)
+          setView(destination)
+        }}
+      />
+    )
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -63,6 +97,14 @@ function App() {
         </button>
 
         <nav className="main-nav" aria-label="主导航">
+          <button
+            type="button"
+            className="main-nav__item"
+            onClick={showDashboard}
+          >
+            <DashboardIcon className="icon" />
+            数据看板
+          </button>
           <button
             type="button"
             className={
@@ -103,19 +145,28 @@ function App() {
         </span>
       </header>
 
-      {selectedDocumentId ? (
-        <DocumentDetailPage
-          documentId={selectedDocumentId}
-          onBack={showDocuments}
-          onDeleted={showDocuments}
-        />
-      ) : view === 'chat' ? (
-        <ChatPage onOpenDocument={openDocumentFromChat} />
-      ) : view === 'status' ? (
-        <SystemStatusPage />
-      ) : (
-        <DocumentsPage onOpenDocument={setSelectedDocumentId} />
-      )}
+      <Suspense
+        fallback={
+          <div className="app-view-loading" role="status">
+            <Spinner label="正在加载视图" />
+            <span>正在铺开工作台…</span>
+          </div>
+        }
+      >
+        {selectedDocumentId ? (
+          <DocumentDetailPage
+            documentId={selectedDocumentId}
+            onBack={showDocuments}
+            onDeleted={showDocuments}
+          />
+        ) : view === 'chat' ? (
+          <ChatPage onOpenDocument={openDocumentFromChat} />
+        ) : view === 'status' ? (
+          <SystemStatusPage />
+        ) : (
+          <DocumentsPage onOpenDocument={setSelectedDocumentId} />
+        )}
+      </Suspense>
 
       <footer className="page-footer">
         <p>RAG Knowledge Base · React + TypeScript + Vite</p>

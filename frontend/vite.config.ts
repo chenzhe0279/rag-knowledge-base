@@ -11,6 +11,9 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
+      watch: {
+        ignored: ['**/.preview/**', '**/.npm-cache/**'],
+      },
       // 开发环境下把 /api 请求代理到 FastAPI，避免浏览器跨域。
       proxy: {
         '/api': {

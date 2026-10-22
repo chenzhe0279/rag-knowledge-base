@@ -234,4 +234,17 @@ export function SparkIcon(props: IconProps) {
   )
 }
 
+export function DashboardIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M4 19V9" />
+      <path d="M10 19V5" />
+      <path d="M16 19v-7" />
+      <path d="M22 19H2" />
+      <path d="m17 8 4-4" />
+      <path d="M17 4h4v4" />
+    </Icon>
+  )
+}
+
 

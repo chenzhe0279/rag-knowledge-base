@@ -772,3 +772,13 @@
     margin-top: 34px;
   }
 }
+
+.app-view-loading {
+  display: grid;
+  place-items: center;
+  gap: 12px;
+  min-height: 46vh;
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
