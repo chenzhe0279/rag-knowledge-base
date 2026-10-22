@@ -1,4 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.util import await_
+
 from app.core.logger import get_logger
 from app.retrieval.vector_retriever import RetrievedChunk
 from uuid import UUID
@@ -12,6 +14,7 @@ from app.workflows.nodes import (
     load_context,
     normalize_query,
     retrieve,
+    route_query,
     stream_generate,
 )
 from app.workflows.rag_state import RAGState
@@ -101,11 +104,13 @@ class ChatService:
                     "question": question,
                 }
 
-                # 1. 加载上下文（仅历史消息，本轮 user 此刻尚未入库）+ 改写查询
+                # 1. 加载上下文（仅历史消息，本轮 user 此刻尚未入库）+ 改写查询 + 路由
                 # 调用 load_context 节点，从数据库拉取历史对话记录，并更新到 state 中
                 state.update(await load_context(state, session))
                 # 调用 normalize_query 节点，对用户问题进行规范化/改写，并更新到 state 中
                 state.update(await normalize_query(state))
+                # 调用 route_query 节点，根据配置的路由策略选择最终的查询文本，并更新到 state 中
+                state.update(await route_query(state))
 
                 # 2. user 消息落库
                 # 将用户本次的提问保存到数据库（独立提交），拿到 user_message_id，防止后续生成失败丢失用户提问
@@ -117,6 +122,11 @@ class ChatService:
                     "data": {"user_message_id": str(state["user_message_id"])},
                 }
 
+                # 把query 路由结果推给前端调试面板(始终发送，前端按route选择渲染)
+                yield {
+                    "event": "query_route",
+                    "data": _build_query_route_payload(state),
+                }
                 # 3. retrieve（含拒答判定）-> 先把引用发给前端，让参考资料面板立刻可见
                 # 调用 retrieve 节点，去向量数据库检索相关文本块，并判断是否需要拒答
                 state.update(await retrieve(state, session))
@@ -231,14 +241,27 @@ class ChatService:
         conv_repo = ConversationRepository(session)
         citation_repo = AnswerCitationRepository(session)
 
-        # 调用静态工厂方法，构建一个 AI 角色的 Message 实体对象。
+        # 调用 ConversationRepository 的静态工厂方法，构建一条 AI（助手）角色的消息实体。
+        # 该方法会在内部自动补全角色的枚举值（MessageRole.ASSISTANT），并设置相关的默认字段。
         assistant_msg = ConversationRepository.make_assistant_message(
-            # 当前会话 ID
+            # 从全局状态字典中取出当前对话的 ID
             state["conversation_id"],
-            # 大模型生成的完整回答
+
+            # 从状态字典中取出大模型生成的完整回答文本，作为消息的正文
             content=state["answer"],
-            # 附加元数据：将是否拒答的状态（True/False）存进 JSONB 字段里，方便日后统计分析
-            extra_metadata={"refused": bool(state.get("refused"))},
+
+            # 【核心设计】：构建 JSONB 格式的扩展元数据 (extra_metadata)。
+            extra_metadata={
+                # 1. 记录本轮回答是否触发了系统的“拒答”机制（如果检索质量太差就会拒答）。
+                # 使用 bool() 强转，确保存入的一定是 true/false，而不是 None 或其他类型。
+                "refused": bool(state.get("refused")),
+
+                # 2. 记录完整的查询优化信息。
+                # 调用 _build_query_route_payload 函数，它会将 route(策略)、query(实际检索词)、
+                # rewritten_query(改写后文本)、hyde_answer(假设文档) 等打包成一个干净的字典。
+                # 这样前端不仅能展示最终回答，还能像上帝视角一样看到 AI 在后台是怎么思考和检索的。
+                "query_route": _build_query_route_payload(state),
+            },
         )
         # 将 AI 消息实体添加到会话中（生成主键）
         await conv_repo.add_messages([assistant_msg])
@@ -313,3 +336,28 @@ def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:
         "quote": chunk.content,
     }
 
+
+# 定义函数：用于构建查询路由（query_route）的数据载荷（Payload）
+# 接收当前的 RAG 全局状态字典 state，返回一个用于传输的字典
+def _build_query_route_payload(state: RAGState) -> dict:
+    """SSE / metadata 共用的 query_route 载荷格式。
+
+    始终携带 4 个可选字段（None 也保留），前端可据此判断展示哪种调试面板。
+    """
+    # 构造并返回一个包含所有路由相关信息的字典
+    return {
+        # 1. 最终使用的路由策略。使用 .get 提供默认值 "original"，防止极端情况下 state 里没这个键导致 KeyError 报错。
+        "route": state.get("route", "original"),
+
+        # 2. 实际用于向量检索的最终查询文本。同样提供空字符串 "" 作为默认兜底。
+        "query": state.get("query", ""),
+
+        # 3. 改写后的查询文本。如果没走 rewrite 策略，这里就是 None。
+        "rewritten_query": state.get("rewritten_query"),
+
+        # 4. HyDE 策略生成的假设性答案。如果没走 hyde 策略，这里就是 None。
+        "hyde_answer": state.get("hyde_answer"),
+
+        # 5. 多路查询生成的子查询列表。如果没走 multi_queries 策略，这里就是 None。
+        "multi_queries": state.get("multi_queries"),
+    }

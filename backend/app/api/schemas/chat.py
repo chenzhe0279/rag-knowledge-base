@@ -6,6 +6,16 @@ from pydantic import BaseModel, ConfigDict, Field
 # 定义消息角色的字面量类型，限制只能传入这三种系统预设的角色
 MessageRoleValue = Literal["user", "assistant", "system"]
 
+QueryRouteValue = Literal["original", "rewrite", "hyde", "multi_queries"]
+
+class QueryRouteRead(BaseModel):
+    """Query 优化的调试快照。仅 assistant 消息会带，前端用于渲染调试面板。"""
+
+    route: QueryRouteValue
+    query: str
+    rewritten_query: str | None = None
+    hyde_answer: str | None = None
+    multi_queries: list[str] | None = None
 
 # 创建会话的请求模型（接收前端传入的数据）
 class ConversationCreate(BaseModel):
@@ -78,22 +88,75 @@ class MessageRead(BaseModel):
     created_at: datetime
     # 消息关联的引用列表，默认通过工厂函数生成一个空列表（防止可变默认值陷阱）
     citations: list[CitationRead] = Field(default_factory=list)
+    # assistant消息的query路由调试信息; user / 旧消息为None
+    query_route: QueryRouteRead | None = None
 
-    # 类方法：将数据库的 ORM 消息对象转换为当前的 Pydantic 响应模型
+    # 定义类方法：将数据库的 Message ORM 对象转换为当前的 Pydantic 响应模型
     @classmethod
-    def from_orm(cls, message) -> "MessageRead":
-        # 构造并返回 Pydantic 对象
+    def from_orm(cls, message) -> "MessageRead":  # type: ignore[no-untyped-def]
+
+        # 提前判断当前消息是不是 AI 助手发出的
+        is_assistant = message.role == "assistant"
+
+        # ===== 处理引用列表 (citations) =====
+        if is_assistant:
+            # 如果是 AI 回答：遍历它的引用记录，转换成 Pydantic 模型列表
+            citations = [CitationRead.from_orm(c) for c in message.citations]
+        else:
+            # 如果是用户提问：没有引用，给个空列表
+            citations = []
+
+        # ===== 处理查询路由调试信息 (query_route) =====
+        if is_assistant:
+            # 如果是 AI 回答：解析扩展元数据里的路由快照
+            query_route = _parse_query_route(message.extra_metadata)
+        else:
+            # 如果是用户提问：没有路由信息，给 None
+            query_route = None
+
+        # 最后，把所有组装好的数据返回给 Pydantic 模型
         return cls(
             id=message.id,
             role=message.role,
             content=message.content,
             created_at=message.created_at,
-            # 如果消息角色是 assistant（AI 回答），则遍历其关联的引用记录并转换为 Pydantic 模型列表；
-            # 如果是 user 或 system 的消息，则返回空列表（因为用户提问和系统提示没有引用来源）。
-            citations=[
-                CitationRead.from_orm(c) for c in message.citations
-            ] if message.role == "assistant" else [],
+            citations=citations,  # 传入上面计算好的引用列表
+            query_route=query_route,  # 传入上面计算好的路由信息
         )
+
+
+# 定义内部辅助函数：用于从 JSONB 元数据中解析出查询路由信息
+# 参数 metadata 可能是字典，也可能是 None（老数据或者没有额外元数据时）
+# 返回值可能是解析好的 QueryRouteRead 模型，也可能解析失败返回 None
+def _parse_query_route(metadata: dict | None) -> QueryRouteRead | None:
+    """从 messages.metadata 中提取 query_route 字段。
+
+    历史消息没有这个字段，非法/缺失时静默返回 None，不阻断接口。
+    """
+
+    # 1. 防御性检查：如果元数据本身就为空（None 或 {}），直接返回 None
+    if not metadata:
+        return None
+
+    # 2. 尝试从字典中获取 "query_route" 这个键的值
+    raw = metadata.get("query_route")
+
+    # 3. 类型检查：如果取出来的值不是字典（比如是 None、字符串、列表等异常情况）
+    if not isinstance(raw, dict):
+        # 直接返回 None，不再往下解析
+        return None
+
+    # 4. 开启异常捕获。因为接下来要交给 Pydantic 做严格校验
+    try:
+        # 使用 Pydantic 的 model_validate 尝试将字典转换为 QueryRouteRead 模型
+        # 如果字段缺失、类型不匹配，Pydantic 会抛出 ValidationError
+        return QueryRouteRead.model_validate(raw)
+    # 5. 捕获所有异常
+    except Exception:
+        # 【核心容错机制】：静默返回 None。
+        # 绝不能因为调试面板的数据解析失败，就导致整个“获取历史消息列表”的接口直接返回 500 错误。
+        # 解析失败无非就是前端看不到调试面板而已，核心的聊天记录必须能正常展示。
+        return None
 
 
 # 会话详情的响应模型（包含会话基本信息以及该会话下的所有消息历史）
