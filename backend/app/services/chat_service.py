@@ -17,36 +17,6 @@ from app.workflows.nodes import (
 from app.workflows.rag_state import RAGState
 # 获取当前模块的日志记录器，用于打印该文件产生的运行日志
 logger = get_logger(__name__)
-
-
-# 定义内部函数：将检索到的文本块对象序列化为字典格式，用于通过 SSE 推送给前端
-def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:
-    """citations SSE 事件载荷格式（与前端约定一致）。
-
-    ordinal 必须显式传入：与 prompt 中给 LLM 看到的「片段 N」编号一致，
-    前端按这个数字渲染 [N] 角标，避免后续顺序丢失导致引用串号。
-    """
-    # 构造并返回一个字典，包含前端渲染引用角标和弹窗所需的所有信息
-    return {
-        # 引用序号（对应大模型回答中的 [N]），由外部显式传入以保证一致性
-        "ordinal": ordinal,
-        # 文本块唯一 ID，转为字符串以适配 JSON 序列化
-        "chunk_id": str(chunk.chunk_id),
-        # 所属文档唯一 ID，同样转为字符串
-        "document_id": str(chunk.document_id),
-        # 文档的名称（如：员工手册.pdf）
-        "document_name": chunk.document_name,
-        # 文本块所在的页码（可能为 None）
-        "page_no": chunk.page_no,
-        # 文本块所在的章节路径（可能为 None）
-        "section_path": chunk.section_path,
-        # 语义相似度得分，使用 round 保留 4 位小数，减少网络传输体积
-        "score": round(chunk.score, 4),
-        # 引用的具体原文内容，供前端悬浮展示
-        "quote": chunk.content,
-    }
-
-
 # 定义聊天服务类，封装与对话相关的核心业务逻辑
 class ChatService:
     """注意：
@@ -315,3 +285,31 @@ class ChatService:
 
         # 将数据库生成的 AI 消息主键 ID 回写到 state 中，供外层的 message_end 事件使用
         state["assistant_message_id"] = assistant_msg.id
+
+# 定义内部函数：将检索到的文本块对象序列化为字典格式，用于通过 SSE 推送给前端
+def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:
+    """citations SSE 事件载荷格式（与前端约定一致）。
+
+    ordinal 必须显式传入：与 prompt 中给 LLM 看到的「片段 N」编号一致，
+    前端按这个数字渲染 [N] 角标，避免后续顺序丢失导致引用串号。
+    """
+    # 构造并返回一个字典，包含前端渲染引用角标和弹窗所需的所有信息
+    return {
+        # 引用序号（对应大模型回答中的 [N]），由外部显式传入以保证一致性
+        "ordinal": ordinal,
+        # 文本块唯一 ID，转为字符串以适配 JSON 序列化
+        "chunk_id": str(chunk.chunk_id),
+        # 所属文档唯一 ID，同样转为字符串
+        "document_id": str(chunk.document_id),
+        # 文档的名称（如：员工手册.pdf）
+        "document_name": chunk.document_name,
+        # 文本块所在的页码（可能为 None）
+        "page_no": chunk.page_no,
+        # 文本块所在的章节路径（可能为 None）
+        "section_path": chunk.section_path,
+        # 语义相似度得分，使用 round 保留 4 位小数，减少网络传输体积
+        "score": round(chunk.score, 4),
+        # 引用的具体原文内容，供前端悬浮展示
+        "quote": chunk.content,
+    }
+
