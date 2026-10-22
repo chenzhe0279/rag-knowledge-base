@@ -29,7 +29,7 @@ export function QueryRoutePanel({
       ? '改写后的检索 Query'
       : route.route === 'hyde'
         ? 'HyDE 假设答案'
-        : route.route === 'multi_queries'
+        : route.route === 'multi_query'
           ? '兜底检索 Query'
           : '最终检索 Query'
   const hasSecondaryRewrite =

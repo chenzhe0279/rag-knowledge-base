@@ -28,10 +28,10 @@ export const QUERY_ROUTE_META: Record<QueryRouteValue, QueryRouteMeta> = {
     description: '先生成一段假设性答案，再用这段答案的语义去检索知识库。',
     tone: 'rose',
   },
-  multi_queries: {
+  multi_query: {
     label: '多路查询',
     caption: 'MULTI-QUERY',
-    description: '从多个角度拆解问题并并行召回，同一个文本块会按最高分去重合并。',
+    description: '从多个角度拆解问题并多路召回，同一个文本块会按最高分去重合并。',
     tone: 'amber',
   },
 }
@@ -40,7 +40,7 @@ export const QUERY_ROUTE_STEPS: { key: QueryRouteValue; label: string }[] = [
   { key: 'original', label: '原始' },
   { key: 'rewrite', label: '改写' },
   { key: 'hyde', label: 'HyDE' },
-  { key: 'multi_queries', label: '多路' },
+  { key: 'multi_query', label: '多路' },
 ]
 
 export function getRouteQuery(route: QueryRoute): string {

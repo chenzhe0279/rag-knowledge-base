@@ -860,7 +860,7 @@
   --route-tint: rgba(167, 110, 133, 0.1);
 }
 
-.chat-route-debug[data-route='multi_queries'] {
+.chat-route-debug[data-route='multi_query'] {
   --route-accent: #947030;
   --route-tint: rgba(165, 125, 57, 0.11);
 }

@@ -125,7 +125,7 @@ class QueryRewriter:
             # 逐行遍历：text.splitlines()
             # line.strip(" -*0123456789. ")：把每一行两边的 空格、短横线、星号、0-9的数字 以及 点号 全部剥除。
             # 确保拿到的纯粹是查询语句本身。
-            line.strip(" -*0123456789. ")
+            line.strip(" -•*0123456789.、 ")
             for line in text.splitlines()
         ]
 
@@ -184,7 +184,7 @@ class QueryRewriter:
                 )
 
             # ================= 分支 3：Multi-Query（多路查询） =================
-            if route == "multi_queries":
+            if route == "multi_query":
                 # 去扩展生成子查询
                 queries = await self.multi_query(question, multi_query_count)
 
@@ -197,7 +197,7 @@ class QueryRewriter:
                 # 因为真正的多路检索是由后续的代码去遍历 multi_queries 列表去执行的。
                 # 这里的 query 仅仅作为保底和展示使用。
                 return QueryRouteResult(
-                    route="multi_queries", query=question, multi_queries=queries
+                    route="multi_query", query=question, multi_queries=queries
                 )
 
             # ================= 兜底分支 =================

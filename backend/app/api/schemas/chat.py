@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # 定义消息角色的字面量类型，限制只能传入这三种系统预设的角色
 MessageRoleValue = Literal["user", "assistant", "system"]
 
-QueryRouteValue = Literal["original", "rewrite", "hyde", "multi_queries"]
+QueryRouteValue = Literal["original", "rewrite", "hyde", "multi_query"]
 
 class QueryRouteRead(BaseModel):
     """Query 优化的调试快照。仅 assistant 消息会带，前端用于渲染调试面板。"""

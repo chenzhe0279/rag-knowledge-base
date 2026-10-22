@@ -130,7 +130,7 @@ const QUERY_ROUTE_VALUES: QueryRouteValue[] = [
   'original',
   'rewrite',
   'hyde',
-  'multi_queries',
+  'multi_query',
 ]
 
 /**
