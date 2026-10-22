@@ -865,6 +865,11 @@
   --route-tint: rgba(165, 125, 57, 0.11);
 }
 
+.chat-route-debug[data-route='rewrite_multi_query'] {
+  --route-accent: #a0603f;
+  --route-tint: rgba(182, 109, 68, 0.12);
+}
+
 .chat-route-debug__summary {
   display: flex;
   align-items: center;
@@ -1072,6 +1077,41 @@
 .chat-route-debug__step.is-active > i {
   background: var(--route-accent);
   border-color: var(--route-accent);
+}
+
+.chat-route-debug__pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 9px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 9px;
+}
+
+.chat-route-debug__pipeline > span {
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-size: 7.5px;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 5px;
+}
+
+.chat-route-debug__pipeline > span.is-accent {
+  color: var(--route-accent);
+  font-weight: 650;
+  background: var(--route-tint);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.chat-route-debug__pipeline > i {
+  color: var(--text-faint);
+  font-size: 8px;
+  font-style: normal;
 }
 
 .chat-route-debug__fields {

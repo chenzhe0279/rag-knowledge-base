@@ -4,8 +4,18 @@ import type { components } from './schema'
 export type ConversationRead = components['schemas']['ConversationRead']
 export type ConversationDetail = components['schemas']['ConversationDetail']
 export type ApiMessageRead = components['schemas']['MessageRead']
-export type QueryRoute = components['schemas']['QueryRouteRead']
-export type QueryRouteValue = QueryRoute['route']
+
+/**
+ * 后端 OpenAPI 目前只生成四种路由。组合路由在后端更新前先由前端补上，
+ * 这样 UI、SSE 解析与历史消息都能提前支持 rewrite_multi_query。
+ */
+type ApiQueryRoute = components['schemas']['QueryRouteRead']
+export type QueryRouteValue =
+  | ApiQueryRoute['route']
+  | 'rewrite_multi_query'
+export type QueryRoute = Omit<ApiQueryRoute, 'route'> & {
+  route: QueryRouteValue
+}
 
 /**
  * SSE citations 事件比历史接口多返回 section_path / score，

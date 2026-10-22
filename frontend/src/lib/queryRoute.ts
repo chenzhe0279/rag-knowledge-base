@@ -1,6 +1,6 @@
 import type { QueryRoute, QueryRouteValue } from '../types/chat'
 
-export type QueryRouteTone = 'neutral' | 'copper' | 'rose' | 'amber'
+export type QueryRouteTone = 'neutral' | 'copper' | 'rose' | 'amber' | 'fusion'
 
 export interface QueryRouteMeta {
   label: string
@@ -34,6 +34,13 @@ export const QUERY_ROUTE_META: Record<QueryRouteValue, QueryRouteMeta> = {
     description: '从多个角度拆解问题并多路召回，同一个文本块会按最高分去重合并。',
     tone: 'amber',
   },
+  rewrite_multi_query: {
+    label: '改写 + 多路查询',
+    caption: 'REWRITE → MULTI',
+    description:
+      '先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果拆成多条子查询，合并多路召回。',
+    tone: 'fusion',
+  },
 }
 
 export const QUERY_ROUTE_STEPS: { key: QueryRouteValue; label: string }[] = [
@@ -41,13 +48,14 @@ export const QUERY_ROUTE_STEPS: { key: QueryRouteValue; label: string }[] = [
   { key: 'rewrite', label: '改写' },
   { key: 'hyde', label: 'HyDE' },
   { key: 'multi_query', label: '多路' },
+  { key: 'rewrite_multi_query', label: '改写+多路' },
 ]
 
 export function getRouteQuery(route: QueryRoute): string {
   if (route.route === 'hyde') {
     return route.hyde_answer ?? route.query
   }
-  if (route.route === 'rewrite') {
+  if (route.route === 'rewrite' || route.route === 'rewrite_multi_query') {
     return route.rewritten_query ?? route.query
   }
   return route.query

@@ -24,6 +24,10 @@ export function QueryRoutePanel({
   const meta = QUERY_ROUTE_META[route.route]
   const finalQuery = getRouteQuery(route)
   const multiQueries = (route.multi_queries ?? []).filter(Boolean)
+  const isCombinedRoute = route.route === 'rewrite_multi_query'
+  const summaryPreview = isCombinedRoute
+    ? `${multiQueries.length} 路子查询 · ${finalQuery}`
+    : finalQuery
   const mainQueryLabel =
     route.route === 'rewrite'
       ? '改写后的检索 Query'
@@ -31,7 +35,9 @@ export function QueryRoutePanel({
         ? 'HyDE 假设答案'
         : route.route === 'multi_query'
           ? '兜底检索 Query'
-          : '最终检索 Query'
+          : route.route === 'rewrite_multi_query'
+            ? '改写后的基准 Query'
+            : '最终检索 Query'
   const hasSecondaryRewrite =
     Boolean(route.rewritten_query) &&
     route.route !== 'rewrite' &&
@@ -60,8 +66,8 @@ export function QueryRoutePanel({
           </span>
           <strong>{meta.label}</strong>
         </span>
-        <span className="chat-route-debug__preview" title={finalQuery}>
-          {finalQuery}
+        <span className="chat-route-debug__preview" title={summaryPreview}>
+          {summaryPreview}
         </span>
         <span className="chat-route-debug__control">
           调试快照
@@ -79,7 +85,7 @@ export function QueryRoutePanel({
 
         <div
           className="chat-route-debug__steps"
-          aria-label="后端可选的四种查询路由策略"
+          aria-label="后端可选的五种查询路由策略"
         >
           {QUERY_ROUTE_STEPS.map((step) => (
             <span
@@ -94,6 +100,25 @@ export function QueryRoutePanel({
             </span>
           ))}
         </div>
+
+        {isCombinedRoute ? (
+          <div
+            className="chat-route-debug__pipeline"
+            aria-label="改写与多路查询的组合执行链"
+          >
+            <span>原问题</span>
+            <i aria-hidden="true">→</i>
+            <span className="is-accent">查询改写</span>
+            <i aria-hidden="true">→</i>
+            <span className="is-accent">
+              {multiQueries.length > 0
+                ? `${multiQueries.length} 路子查询`
+                : '多路子查询'}
+            </span>
+            <i aria-hidden="true">→</i>
+            <span>合并召回</span>
+          </div>
+        ) : null}
 
         <div className="chat-route-debug__fields">
           {originalQuestion ? (

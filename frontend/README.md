@@ -67,7 +67,9 @@ npm run dev
 
 - 基于已入库文档的 RAG 问答，回答通过 **SSE** 流式返回
 - 支持 `message_start`、`query_route`、`citations`、`token`、`message_end`、`error` 事件
-- 查询路由调试：实时展示 `original` / `rewrite` / `hyde` / `multi_query` 策略
+- 查询路由调试：实时展示 `original` / `rewrite` / `hyde` / `multi_query` / `rewrite_multi_query` 策略
+- 支持组合路由 `rewrite_multi_query`：先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果扩展多路子查询
+- 组合路由在复用 `rewritten_query` 与 `multi_queries` 两个字段的同时，用「原问题 → 改写 → 多路子查询 → 合并召回」的流程条呈现执行链
 - 每条 assistant 消息可展开路由快照，查看原始问题、实际检索 Query、改写内容、HyDE 假设答案及多路子查询
 - 路由快照由后端持久化，刷新页面或恢复历史会话后仍可查看；旧消息无快照时自动隐藏
 - 侧栏展示当前查询路由策略、引用匹配度柱状图与来源排行
