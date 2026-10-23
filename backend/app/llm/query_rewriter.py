@@ -200,6 +200,39 @@ class QueryRewriter:
                     route="multi_query", query=question, multi_queries=queries
                 )
 
+            # ================= 分支 4：Rewrite_Multi_Query（改写+多路查询） =================
+            # 判断路由器是否选择了“先改写、再多路查询”的组合策略
+            if route == "rewrite_multi_query":
+                # 第一阶段：把依赖上下文或口语化的问题改写为完整问题
+                rewritten = await self.rewrite(question)
+                # 如果改写结果为空，说明第一阶段失败
+                if not rewritten:
+                    # 第一阶段失败时退回原问题检索，避免空字符串进入向量检索
+                    return QueryRouteResult(route="original", query=question)
+                # 第二阶段：使用改写后的问题扩展多条子查询
+                queries = await self.multi_query(rewritten, multi_query_count)
+                # 如果子查询少于两条，说明无法形成有意义的多路召回
+                if len(queries) < 2:
+                    # 保留第一阶段成果，降级为普通 rewrite
+                    return QueryRouteResult(
+                        # 最终路由降级为 rewrite
+                        route="rewrite",
+                        # 检索使用改写后的完整问题
+                        query=rewritten,
+                        # 改写结果继续传给前端和持久化层
+                        rewritten_query=rewritten,
+                    )
+                # 两个阶段都成功，返回组合路由及两个阶段的中间产物
+                return QueryRouteResult(
+                    # 路由标记为“改写 + 多路查询”
+                    route="rewrite_multi_query",
+                    # 使用改写后的问题作为基准 Query
+                    query=rewritten,
+                    # 保存改写结果供调试面板展示
+                    rewritten_query=rewritten,
+                    # 保存多路子查询供检索节点使用
+                    multi_queries=queries,
+                )
             # ================= 兜底分支 =================
             # 如果路由返回的是 "original"，或者发生了任何意料之外的情况，直接返回原问题
             return QueryRouteResult(route="original", query=question)

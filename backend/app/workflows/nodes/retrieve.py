@@ -15,7 +15,7 @@ async def retrieve(state: RAGState, session: AsyncSession) -> RAGState:
     top_k = settings.retrieval_top_k
 
     # 3. 判断是否开启了多路查询（Multi-Query）策略，并且确实生成了子查询列表
-    if state.get("route") == "multi_query" and state.get("multi_queries"):
+    if state.get("multi_queries"):
         # 各子查询独立召回，再合并；不在这里做 RRF（倒数排名融合），留给下一期优化
         # 准备一个二维列表，用于装每一次子查询返回的文本块列表
         bundles: list[list[RetrievedChunk]] = []
