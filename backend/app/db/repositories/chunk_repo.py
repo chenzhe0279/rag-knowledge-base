@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -209,3 +209,41 @@ class DocumentChunkRepository:
 
         # 返回包含 (chunk, distance) 元组的列表
         return result
+
+    async def keyword_search(
+        self,
+        ts_query: str,
+        top_k: int,
+    ) -> list[tuple[DocumentChunk, float]]:
+        """中文全文检索 Top-K：websearch_to_tsquery + ts_rank。
+
+        ts_query 是 tokenizer.build_tsquery() 生成的 OR 表达式，
+        例如 '"差旅" or "报销" or "制度"'。
+
+        - 用 simple 文本搜索配置（content_tokens 已经由 jieba 预分词）
+        - 仅命中 status='ready' 文档，避免拿到尚未完成入库的脏 chunk
+        - 返回 (chunk, ts_rank) 列表，ts_rank 越大越相关
+        """
+        # 第一个参数必须是 regconfig 类型，不能是普通字符串。
+        # SQLAlchemy 对字符串参数会尝试自动 cast；用 literal_column 显式写成
+        # 'simple'::regconfig 最稳，避免不同版本下报 "function does not exist"。
+        tsquery = func.websearch_to_tsquery(
+            literal_column("'simple'::regconfig"),
+            ts_query,
+        )
+        rank_expr = func.ts_rank(DocumentChunk.content_tsv, tsquery)
+
+        stmt = (
+            select(DocumentChunk, rank_expr.label("rank"))
+            .join(Document, Document.id == DocumentChunk.document_id)
+            .where(
+                Document.status == "ready",
+                DocumentChunk.content_tsv.op("@@")(tsquery),
+            )
+            .order_by(rank_expr.desc())
+            .limit(top_k)
+            .options(selectinload(DocumentChunk.document))
+        )
+
+        rows = (await self.session.execute(stmt)).all()
+        return [(chunk, float(rank)) for chunk, rank in rows]

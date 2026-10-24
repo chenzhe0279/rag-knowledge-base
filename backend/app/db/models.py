@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Computed,
     DateTime,
     ForeignKey,
     Integer,
@@ -12,7 +13,7 @@ from sqlalchemy import (
     func,
 )
 
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
@@ -127,6 +128,10 @@ class DocumentChunk(Base):
     # 文本块的正文内容。使用 Text 类型（不限制长度），不允许为空
     content: Mapped[str] = mapped_column(Text, nullable=False)
 
+    # 应用层 jieba 分词结果，空格连接。
+    # 入库时由 pipeline 写入，已有数据由 scripts/backfill_content_tokens.py 回填。
+    content_tokens: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
     # 【核心】：文本块对应的向量（Embedding）
     # 维度由 settings.embedding_dim（比如 1024）控制。
     # 注意：使用 pgvector 的 Vector 类型，这里存储的是一个浮点数数组（list[float]）
@@ -154,6 +159,14 @@ class DocumentChunk(Base):
     # default=dict 保证每次新建对象时，默认给个空字典 {}，防止传 None 报错。
     extra_metadata: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
+    )
+
+    # 中文全文检索索引列。
+    # GENERATED ALWAYS 由 PostgreSQL 根据 content_tokens 自动维护，应用层不写、只读。
+    content_tsv: Mapped[str] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('simple'::regconfig, content_tokens)", persisted=True),
+        nullable=False,
     )
 
     # 创建时间（数据库自动生成）
@@ -336,6 +349,10 @@ class AnswerCitation(Base):
 
     # 冗余存储的引用原文（快照）：即使源 chunk 被修改或删除，这里依然保存着当时 LLM 引用的具体文字内容，使用 Text 类型，不允许为空。
     quote: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 混合检索调试元数据：sources / vector_rank / keyword_rank / *_score / rrf_score。
+    # 历史 citation 没有这个字段，所以 nullable=True。
+    retrieval_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # 建立多对一关系：多条引用快照对应一条 AI 消息。
     # 与 Message 模型中的 citations 属性构成双向绑定。

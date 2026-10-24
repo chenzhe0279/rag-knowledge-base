@@ -154,6 +154,7 @@ dependencies = [
     { name = "cos-python-sdk-v5" },
     { name = "docling" },
     { name = "fastapi" },
+    { name = "jieba" },
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -174,6 +175,7 @@ requires-dist = [
     { name = "cos-python-sdk-v5", specifier = ">=1.9.44" },
     { name = "docling", specifier = ">=2.140.0" },
     { name = "fastapi", specifier = ">=0.143.2" },
+    { name = "jieba", specifier = "==0.42.1" },
     { name = "langchain", specifier = ">=1.4.6" },
     { name = "langchain-core", specifier = ">=1.6.12" },
     { name = "langchain-openai", specifier = ">=1.7.2" },
@@ -185,6 +187,14 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.38.0" },
+]
+
+[[package]]
+name = "jieba"
+version = "0.42.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "file:///D:/soft/pythonProject/rag-knowledge-base/backend/vendor/jieba/dist/jieba-0.42.1-py3-none-any.whl", hash = "sha256:9e7c7f2d9a937fd8a8b932c34829fb4741ab6097a3cab8823c871f007ef26189", size = 19314527 },
 ]
 
 [[package]]

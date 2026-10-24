@@ -6,6 +6,7 @@ from app.db.repositories.chunk_repo import DocumentChunkRepository
 from app.db.repositories.document_repo import DocumentRepository
 from app.db.session import AsyncSessionLocal
 from app.ingestion import embedder, parser, splitter
+from app.retrieval.tokenizer import segment
 from app.storage.file_service import get_file_service
 import asyncio
 from pathlib import Path
@@ -172,6 +173,7 @@ async def ingest_document(document_id: UUID) -> None:
                     DocumentChunk(
                         document_id=document_id,
                         content=c.page_content,  # 文本内容
+                        content_tokens=segment(c.page_content),  # jieba 预分词，供全文检索
                         embedding=vec,  # 对应的向量 (list[float])
                         # 从 LangChain 的 metadata 字典中安全地提取页码（如果没有则返回 None）
                         page_no=c.metadata.get("page_no"),

@@ -118,3 +118,10 @@ alembic.ini.local
 # Docling 模型与 HuggingFace 下载缓存
 backend/artifacts/
 backend/.hf-cache/
+
+# ===== 本机工具缓存（统一放 D 盘，不进 git） =====
+backend/.cache/
+backend/.uv-cache/
+backend/.uv-cache2/
+backend/.tmp/
+backend/vendor/jieba/dist/*.whl

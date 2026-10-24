@@ -1,0 +1,6 @@
+# uv 项目级配置（D 盘）。
+# 本机 C 盘 uv 缓存无写权限，且 jieba 官方只发布 sdist，这里统一改为：
+# - 缓存放到项目内 .uv-cache2（D 盘）
+# - 从 vendor/jieba/dist 的本地 wheel 安装 jieba，不联网、不本地编译
+cache-dir = ".uv-cache2"
+find-links = ["vendor/jieba/dist"]
