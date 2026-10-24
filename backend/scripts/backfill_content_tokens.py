@@ -1,4 +1,4 @@
-"""回填 document_chunks.content_tokens（Windows 本地版第 6 期）。
+"""回填 document_chunks.content_tokens
 
 用法（在 backend 目录下）：
     uv run python -m scripts.backfill_content_tokens
