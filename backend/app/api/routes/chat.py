@@ -64,9 +64,16 @@ async def stream_chat(conversation_id: UUID, payload: ChatRequest, session: DbSe
     """
     # 实例化业务服务层
     service = ChatService(session)
+    # 1. 判断前端有没有传过滤条件（payload.filters 可能是个对象，也可能是 None）
+    if payload.filters:
+        # 2. 如果传了，就调用 to_domain()，把 API 层的 Pydantic 模型转换为领域层的不可变对象
+        filters = payload.filters.to_domain()
+    else:
+        # 3. 如果没传（为 None），就直接赋值为 None
+        filters = None
     # 调用服务层的异步生成器 stream_answer。
     # 它会依次产生 message_start、citations、token 和 message_end 等事件。
-    async for sse_event in service.stream_answer(conversation_id, payload.question):
+    async for sse_event in service.stream_answer(conversation_id, payload.question, filters=filters):
         # 将服务层产出的字典数据，包装成 FastAPI 标准的 SSE 事件对象并推送给前端
         yield ServerSentEvent(
             # 事件携带的数据载荷（通常是 JSON 序列化后的字符串或字典）

@@ -8,6 +8,8 @@ from app.workflows.rag_state import RAGState
 
 # 定义异步节点函数：执行向量检索并根据检索质量决定是否拒答
 async def retrieve(state: RAGState) -> RAGState:
+    # 0. 获取过滤条件
+    filters = state.get("filters")
     # 1. 实例化向量检索器（封装了 pgvector 的检索逻辑）
     retriever = HybridRetriever()
 
@@ -25,14 +27,14 @@ async def retrieve(state: RAGState) -> RAGState:
         # 遍历所有的子查询（使用 or [] 兜底，防止空值报错）
         for sub_query in state["multi_queries"] or []:
             # 对每个子查询执行向量检索，拿到结果列表，并追加到 bundles 中
-            bundles.append(await retriever.search(sub_query,  recall_top_k=recall_top_k,  final_top_k=final_top_k))
+            bundles.append(await retriever.search(sub_query,  recall_top_k=recall_top_k,  final_top_k=final_top_k, filters=filters))
 
         # 【核心逻辑】将多路召回的结果进行去重、合并，并截取最终的 Top-K
         chunks = _merge_chunks(bundles, top_k=final_top_k)
     else:
         # 如果不是多路查询策略（比如 original, rewrite, hyde），就只用单条查询进行检索
         # 注意：这里的 state["query"] 可能是原问题，也可能是改写后的问题，或者是假设性文档（HyDE）
-        chunks = await retriever.search(state["query"], recall_top_k=recall_top_k,  final_top_k=final_top_k)
+        chunks = await retriever.search(state["query"], recall_top_k=recall_top_k,  final_top_k=final_top_k, filters=filters)
 
     # 4. 触发拒答机制的判定逻辑：
     # 条件 A: chunks 为空列表（完全没搜到）

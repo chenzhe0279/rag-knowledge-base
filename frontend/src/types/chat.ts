@@ -6,8 +6,8 @@ export type ConversationDetail = components['schemas']['ConversationDetail']
 export type ApiMessageRead = components['schemas']['MessageRead']
 
 /**
- * 后端 OpenAPI 目前只生成四种路由。组合路由在后端更新前先由前端补上，
- * 这样 UI、SSE 解析与历史消息都能提前支持 rewrite_multi_query。
+ * 后端 OpenAPI 可能滞后，或缺少组合路由；前端保留 rewrite_multi_query 兼容，
+ * 这样 UI、SSE 解析与历史消息都能正常处理。
  */
 type ApiQueryRoute = components['schemas']['QueryRouteRead']
 export type QueryRouteValue =
@@ -15,6 +15,20 @@ export type QueryRouteValue =
   | 'rewrite_multi_query'
 export type QueryRoute = Omit<ApiQueryRoute, 'route'> & {
   route: QueryRouteValue
+}
+
+/**
+ * 后端 citation.retrieval_meta 的结构。
+ * sources 记录命中路径：["vector"] / ["keyword"] / ["vector", "keyword"]。
+ * 各 *_rank / *_score 只有对应检索路命中时才有值。
+ */
+export interface RetrievalMeta {
+  sources?: string[]
+  vector_rank?: number | null
+  vector_score?: number | null
+  keyword_rank?: number | null
+  keyword_score?: number | null
+  rrf_score?: number | null
 }
 
 /**
@@ -31,6 +45,8 @@ export interface ChatCitation {
   section_path?: string | null
   score?: number
   quote: string
+  /** 混合检索调试元数据；旧历史消息可能没有这个字段。 */
+  retrieval_meta?: RetrievalMeta | null
 }
 
 export type ChatRole = 'user' | 'assistant' | 'system'

@@ -10,7 +10,9 @@ import type {
   ConversationRead,
   QueryRoute,
   QueryRouteValue,
+  RetrievalMeta,
 } from '../types/chat'
+import type { ApiRetrievalFilters } from '../lib/retrievalFilters'
 
 export class ChatApiError extends Error {
   readonly status?: number
@@ -112,6 +114,32 @@ export async function getConversation(
   return payload as ConversationDetail
 }
 
+function toNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * 后端 retrieval_meta 是 JSONB，历史数据可能缺失或字段类型异常。
+ * 这里做一次防御式解析，避免调试数据把聊天主流程打挂。
+ */
+function toRetrievalMeta(input: unknown): RetrievalMeta | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const raw = input as Record<string, unknown>
+  return {
+    sources: Array.isArray(raw.sources)
+      ? raw.sources.filter((source): source is string => typeof source === 'string')
+      : [],
+    vector_rank: toNumberOrNull(raw.vector_rank),
+    vector_score: toNumberOrNull(raw.vector_score),
+    keyword_rank: toNumberOrNull(raw.keyword_rank),
+    keyword_score: toNumberOrNull(raw.keyword_score),
+    rrf_score: toNumberOrNull(raw.rrf_score),
+  }
+}
+
 function toCitation(citation: ChatCitation): ChatCitation {
   return {
     id: citation.id,
@@ -123,6 +151,7 @@ function toCitation(citation: ChatCitation): ChatCitation {
     section_path: citation.section_path ?? null,
     score: citation.score,
     quote: citation.quote,
+    retrieval_meta: toRetrievalMeta(citation.retrieval_meta),
   }
 }
 
@@ -204,9 +233,15 @@ function parseSseData(data: string): Record<string, unknown> {
 export async function streamChat(
   conversationId: string,
   question: string,
+  filters: ApiRetrievalFilters | null,
   handlers: ChatStreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
+  const body: Record<string, unknown> = { question }
+  if (filters) {
+    body.filters = filters
+  }
+
   await fetchEventSource(
     `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}/chat`,
     {
@@ -215,7 +250,7 @@ export async function streamChat(
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(body),
       signal,
       openWhenHidden: true,
 

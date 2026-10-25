@@ -1,6 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.chunk_repo import DocumentChunkRepository
+from app.retrieval.filters import RetrievalFilter
+from app.retrieval.tokenizer import build_tsquery
 from app.retrieval.vector_retriever import RetrievedChunk
 
 
@@ -16,11 +18,18 @@ class KeywordRetriever:
         self.chunk_repo = DocumentChunkRepository(session)
 
     # 核心方法：接收用户查询字符串和 Top-K 数量，返回检索结果列表
-    async def search(self, query: str, top_k: int) -> list[RetrievedChunk]:
+    async def search(self, query: str, top_k: int,  filters: RetrievalFilter | None = None,) -> list[RetrievedChunk]:
+        # keyword_search 需要的是 tsquery 字符串，不是原始中文问题。
+        # 先走 tokenizer.build_tsquery，把中文切成带引号的 OR 表达式，
+        # 否则 PostgreSQL 会把整句中文当成一个 token，导致关键词路 0 命中。
+        ts_query = build_tsquery(query)
+        if not ts_query:
+            return []
+
         # 调用仓储层的 keyword_search 方法。
         # 内部会利用 PostgreSQL 的全文检索功能去匹配并计算 ts_rank 得分。
         # 返回的 rows 是一个元组列表：(DocumentChunk对象, ts_rank得分)
-        rows = await self.chunk_repo.keyword_search(query, top_k)
+        rows = await self.chunk_repo.keyword_search(ts_query, top_k,  filters=filters,)
 
         # 1. 先准备一个空列表，用于存放转换后的结果
         result = []

@@ -2,6 +2,7 @@ from typing import Literal, TypedDict
 from uuid import UUID
 
 from app.db.models import Message
+from app.retrieval.filters import RetrievalFilter
 from app.retrieval.vector_retriever import RetrievedChunk
 
 QueryRoute = Literal["original", "rewrite", "hyde", "multi_query", "rewrite_multi_query"]
@@ -53,3 +54,6 @@ class RAGState(TypedDict, total=False):
     user_message_id: UUID
     # 助手回复存入数据库后生成的 UUID
     assistant_message_id: UUID
+
+    # ==================== 条件过滤查询 ====================
+    filters: RetrievalFilter | None

@@ -18,7 +18,20 @@ import {
   StopIcon,
 } from '../components/Icons'
 import { QueryRoutePanel } from '../components/QueryRoutePanel'
+import { RetrievalFilterBar } from '../components/RetrievalFilterBar'
+import { RetrievalMetaPanel } from '../components/RetrievalMetaPanel'
 import { QUERY_ROUTE_META } from '../lib/queryRoute'
+import {
+  formatCitationMeta,
+  getRetrievalSourceKind,
+  getRetrievalSourceLabel,
+} from '../lib/retrieval'
+import {
+  emptyChatFilters,
+  getFilterDateError,
+  toApiFilters,
+  type ChatFilters,
+} from '../lib/retrievalFilters'
 import { formatTime } from '../lib/format'
 import type {
   ChatCitation,
@@ -51,6 +64,12 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
+/** 引用按钮的悬浮提示：原文 + 混合检索排名摘要。 */
+function citationTitle(citation: ChatCitation): string {
+  const meta = formatCitationMeta(citation)
+  return meta ? `${citation.quote}\n\n${meta}` : citation.quote
+}
+
 function findOriginalQuestion(
   messages: ChatMessage[],
   assistantIndex: number,
@@ -74,6 +93,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   )
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [filters, setFilters] = useState<ChatFilters>(() => emptyChatFilters())
   const streamRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -137,25 +157,28 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   const latestRouteMeta = latestQueryRoute
     ? QUERY_ROUTE_META[latestQueryRoute.route]
     : null
-  const scores = latestCitations
-    .map((citation) => citation.score)
+  const vectorScores = latestCitations
+    .map((citation) => citation.retrieval_meta?.vector_score)
     .filter((score): score is number => typeof score === 'number')
-  const topScore = scores.length > 0 ? Math.max(...scores) : null
-  const hasScores = topScore !== null
-  const signalValue = hasScores
-    ? Math.round(topScore * 100)
-    : latestCitations.length
-  const signalSuffix = hasScores
-    ? '%'
-    : latestCitations.length > 0
-      ? '条'
-      : ''
-  const signalCaption = hasScores
-    ? '最高引用匹配度'
-    : latestCitations.length > 0
-      ? '历史引用数量'
-      : '最高引用匹配度'
-  const canSend = input.trim().length > 0 && !streaming
+  const topVectorScore =
+    vectorScores.length > 0 ? Math.max(...vectorScores) : null
+  const topVectorPercent =
+    topVectorScore === null ? null : Math.round(topVectorScore * 100)
+  const signalValue = topVectorPercent ?? latestCitations.length
+  const signalSuffix =
+    topVectorPercent !== null
+      ? '%'
+      : latestCitations.length > 0
+        ? '条'
+        : ''
+  const signalCaption =
+    topVectorPercent !== null
+      ? '最高向量相似度'
+      : latestCitations.length > 0
+        ? '引用数量'
+        : '最高向量相似度'
+  const filterError = getFilterDateError(filters)
+  const canSend = input.trim().length > 0 && !streaming && !filterError
 
   const startNewConversation = () => {
     abortRef.current?.abort()
@@ -172,6 +195,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   const sendQuestion = async (rawQuestion: string) => {
     const question = rawQuestion.trim()
     if (!question || streaming) {
+      return
+    }
+
+    const currentFilterError = getFilterDateError(filters)
+    if (currentFilterError) {
+      setError(currentFilterError)
       return
     }
 
@@ -240,6 +269,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
       await streamChat(
         activeConversation.id,
         question,
+        toApiFilters(filters),
         {
           onMessageStart: ({ user_message_id }) => {
             setMessages((current) =>
@@ -363,13 +393,14 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           </h1>
           <p className="hero__lead">
             基于已入库文档进行检索与生成。查询路由会自动选择原查询、改写、HyDE
-            或多路检索策略，回答以 SSE 流式返回，并保留完整调试快照。
+            或多路检索策略，再通过向量语义召回与关键词全文召回做混合检索，最后由
+            RRF 融合排序。回答以 SSE 流式返回，并保留完整调试快照。
           </p>
         </div>
         <div className="chat-hero__aside">
           <span className="chat-live-pill">
             <span className="chat-live-pill__dot" aria-hidden="true" />
-            SSE · QUERY ROUTING
+            SSE · HYBRID RETRIEVAL
           </span>
           <p>回答来自知识库检索，不脱离文档凭空生成。</p>
           <div
@@ -379,7 +410,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             <span>Rewrite</span>
             <span>HyDE</span>
             <span>Multi-Query</span>
-            <span>Debug Snapshot</span>
+            <span>Hybrid + RRF</span>
           </div>
         </div>
       </section>
@@ -430,7 +461,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           </div>
 
           <div className="chat-rail__card chat-rail__card--signal">
-            <div className="chat-rail__eyebrow">RETRIEVAL SIGNAL</div>
+            <div className="chat-rail__eyebrow">HYBRID RETRIEVAL</div>
             <div className="chat-signal__score">
               <strong>{latestCitations.length > 0 ? signalValue : '—'}</strong>
               <span>{signalSuffix}</span>
@@ -449,10 +480,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 ? latestCitations.slice(0, 5).map((citation, index) => ({
                     key: citation.ordinal,
                     height:
-                      typeof citation.score === 'number'
+                      typeof citation.retrieval_meta?.vector_score === 'number'
                         ? Math.max(
                             18,
-                            Math.round(citation.score * 100),
+                            Math.round(
+                              citation.retrieval_meta.vector_score * 100,
+                            ),
                           )
                         : Math.max(22, 64 - index * 10),
                   }))
@@ -469,28 +502,47 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
 
             <div className="chat-signal__list">
               {latestCitations.length > 0 ? (
-                latestCitations.slice(0, 4).map((citation) => (
-                  <button
-                    type="button"
-                    className="chat-source-row"
-                    key={`${citation.ordinal}-${citation.document_name}`}
-                    onClick={() => openCitation(citation)}
-                    disabled={!citation.document_id}
-                    title={citation.quote}
-                  >
-                    <span className="chat-source-row__index">
-                      [{citation.ordinal}]
-                    </span>
-                    <span className="chat-source-row__name">
-                      {citation.document_name}
-                    </span>
-                    <span className="chat-source-row__score">
-                      {typeof citation.score === 'number'
-                        ? `${Math.round(citation.score * 100)}%`
-                        : '—'}
-                    </span>
-                  </button>
-                ))
+                latestCitations.slice(0, 4).map((citation) => {
+                  const kind = getRetrievalSourceKind(
+                    citation.retrieval_meta,
+                  )
+                  const vectorScore = citation.retrieval_meta?.vector_score
+                  const keywordRank = citation.retrieval_meta?.keyword_rank
+
+                  return (
+                    <button
+                      type="button"
+                      className="chat-source-row"
+                      key={`${citation.ordinal}-${citation.document_name}`}
+                      onClick={() => openCitation(citation)}
+                      disabled={!citation.document_id}
+                      title={citationTitle(citation)}
+                    >
+                      <span className="chat-source-row__index">
+                        [{citation.ordinal}]
+                      </span>
+                      <span className="chat-source-row__name">
+                        {citation.document_name}
+                      </span>
+                      {citation.retrieval_meta ? (
+                        <span
+                          className={`chat-source-row__route chat-source-row__route--${kind}`}
+                        >
+                          {getRetrievalSourceLabel(kind)}
+                        </span>
+                      ) : null}
+                      <span className="chat-source-row__score">
+                        {typeof vectorScore === 'number'
+                          ? `V ${Math.round(vectorScore * 100)}%`
+                          : typeof keywordRank === 'number'
+                            ? `K #${keywordRank}`
+                            : typeof citation.score === 'number'
+                              ? `${Math.round(citation.score * 100)}%`
+                              : '—'}
+                      </span>
+                    </button>
+                  )
+                })
               ) : (
                 <p className="chat-signal__empty">
                   生成回答后，命中片段会按相关度显示在这里。
@@ -602,22 +654,44 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                         />
                       ) : null}
 
+                      {isAssistant ? (
+                        <RetrievalMetaPanel
+                          citations={message.citations}
+                          live={streaming && isLast}
+                        />
+                      ) : null}
+
                       {isAssistant && message.citations.length > 0 ? (
                         <div className="chat-message__sources">
-                          {message.citations.map((citation) => (
-                            <button
-                              type="button"
-                              className="chat-source-chip"
-                              key={`${citation.ordinal}-${citation.document_name}`}
-                              onClick={() => openCitation(citation)}
-                              disabled={!citation.document_id}
-                              title={citation.quote}
-                            >
-                              <span>[{citation.ordinal}]</span>
-                              {citation.document_name}
-                              {citation.page_no ? ` · p.${citation.page_no}` : ''}
-                            </button>
-                          ))}
+                          {message.citations.map((citation) => {
+                            const kind = getRetrievalSourceKind(
+                              citation.retrieval_meta,
+                            )
+
+                            return (
+                              <button
+                                type="button"
+                                className="chat-source-chip"
+                                key={`${citation.ordinal}-${citation.document_name}`}
+                                onClick={() => openCitation(citation)}
+                                disabled={!citation.document_id}
+                                title={citationTitle(citation)}
+                              >
+                                <span>[{citation.ordinal}]</span>
+                                {citation.document_name}
+                                {citation.page_no
+                                  ? ` · p.${citation.page_no}`
+                                  : ''}
+                                {citation.retrieval_meta ? (
+                                  <i
+                                    className={`chat-source-chip__route chat-source-chip__route--${kind}`}
+                                  >
+                                    {getRetrievalSourceLabel(kind)}
+                                  </i>
+                                ) : null}
+                              </button>
+                            )
+                          })}
                         </div>
                       ) : null}
                     </article>
@@ -636,6 +710,15 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
               </button>
             </div>
           ) : null}
+
+          <RetrievalFilterBar
+            value={filters}
+            onChange={(next) => {
+              setFilters(next)
+              setError(null)
+            }}
+            disabled={streaming}
+          />
 
           <form className="chat-composer" onSubmit={handleSubmit}>
             <textarea

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.chunk_repo import DocumentChunkRepository
 from app.ingestion.embedder import get_embeddings
+from app.retrieval.filters import RetrievalFilter
 
 
 # 装饰器：自动生成初始化方法等样板代码，frozen=True 表示生成的对象是只读的（不可变对象）
@@ -77,14 +78,14 @@ class VectorRetriever:
         self.chunk_repo = DocumentChunkRepository(session)
 
     # 核心方法：接收用户查询字符串和 Top-K 数量，返回检索结果列表
-    async def search(self, query: str, top_k: int) -> list[RetrievedChunk]:
+    async def search(self, query: str, top_k: int, filters: RetrievalFilter | None = None,) -> list[RetrievedChunk]:
         # 单 query 走 aembed_query，DashScope 单条调用更直接
         # 调用 Embedding 模型（如阿里云 DashScope），将用户的文本查询转化为向量（list[float]）
         embedding = await get_embeddings().aembed_query(query)
 
         # 调用仓储层的方法，拿着向量和 Top-K 去数据库里进行余弦距离检索
         # 返回的是一个元组列表：(DocumentChunk对象, 距离值)
-        rows = await self.chunk_repo.vector_search(embedding, top_k)
+        rows = await self.chunk_repo.vector_search(embedding, top_k,  filters=filters,)
 
         # 1. 先准备一个空列表
         result = []

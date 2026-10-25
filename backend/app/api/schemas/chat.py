@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.retrieval.filters import RetrievalFilter
 
 # 定义消息角色的字面量类型，限制只能传入这三种系统预设的角色
 MessageRoleValue = Literal["user", "assistant", "system"]
@@ -225,9 +227,47 @@ class ConversationDetail(BaseModel):
     messages: list[MessageRead]
 
 
+class RetrievalFilters(BaseModel):
+    # 1. 限制文件类型：列表类型，最大允许传 20 个。
+    # default_factory=list 保证每个实例拥有独立的空列表，防止内存共享污染。
+    mime_types: list[str] = Field(default_factory=list, max_length=20)
+
+    # 2. 文档创建时间范围限制（起始时间和结束时间），可选。
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+
+    # 3. 指定特定文档 ID 列表：最大允许传 200 个。
+    document_ids: list[UUID] = Field(default_factory=list, max_length=200)
+
+    # 【核心校验逻辑】：Pydantic V2 的模型验证器。
+    # mode="after" 表示在所有字段都解析完毕之后，执行此方法进行跨字段的业务逻辑校验。
+    @model_validator(mode="after")
+    def validate_date_range(self):
+        # 防呆设计：如果前端传了起始和结束时间，且“起始时间 > 结束时间”，直接抛出异常。
+        # 阻止非法的时间范围进入底层数据库查询。
+        if self.created_from and self.created_to and self.created_from > self.created_to:
+            raise ValueError("created_from 不能晚于 created_to")
+        return self  # 校验通过，必须返回 self
+
+    # 【领域模型转换】：将 API 层的 Pydantic 模型，转换为领域层（Domain）的不可变对象。
+    def to_domain(self) -> RetrievalFilter:
+        # 为什么要把 list 转成 tuple？
+        # 因为领域模型 RetrievalFilter 设置了 frozen=True（不可变），
+        # list 在内部仍然可以被修改，转成 tuple 才能真正实现深度的“绝对只读”，保证并发安全。
+        return RetrievalFilter(
+            mime_types=tuple(self.mime_types),
+            created_from=self.created_from,
+            created_to=self.created_to,
+            document_ids=tuple(self.document_ids),
+        )
+
+
 # 发起聊天提问的请求模型
 class ChatRequest(BaseModel):
     # 用户提出的问题文本：最小长度为1（不能发空消息），最大长度限制为2000个字符（防止 token 超限或恶意刷屏）
     question: str = Field(min_length=1, max_length=2000)
 
-
+    # 【高级功能】：本次提问可携带过滤条件。
+    # 比如用户在前端勾选了“只搜索 PDF 文档”或者“只搜索上个月的文档”，就会传这个字段。
+    # 类型为 RetrievalFilters 或 None（表示不限制检索范围）。
+    filters: RetrievalFilters | None = None

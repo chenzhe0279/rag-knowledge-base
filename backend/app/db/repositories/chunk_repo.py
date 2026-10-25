@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import DocumentChunk, Document
+from app.retrieval.filters import RetrievalFilter
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,7 @@ class DocumentChunkRepository:
             query_embedding: list[float],
             # 需要返回的候选文本块数量（Top-K）
             top_k: int,
+            filters: RetrievalFilter | None = None,
     ) -> list[tuple[DocumentChunk, float]]:
         """按 cosine 距离做 Top-K 向量检索。
 
@@ -186,8 +188,8 @@ class DocumentChunkRepository:
             select(DocumentChunk, distance.label("distance"))
             # 关联 Document 表（INNER JOIN），条件是 Document 的 id 等于 Chunk 的 document_id
             .join(Document, Document.id == DocumentChunk.document_id)
-            # 过滤条件：只检索那些所属文档状态为 "ready"（已完成解析入库）的文本块
-            .where(Document.status == "ready")
+            # 过滤条件
+            .where(*_document_filter_conditions(filters))
             # 排序规则：按距离升序排列（距离越小，说明语义越相似，排在越前面）
             .order_by(distance.asc())
             # 限制只取前 K 条
@@ -211,7 +213,7 @@ class DocumentChunkRepository:
         return result
 
     # 定义异步方法：执行基于关键词的中文全文检索
-    async def keyword_search(self, ts_query: str, top_k: int) -> list[tuple[DocumentChunk, float]]:
+    async def keyword_search(self, ts_query: str, top_k: int,  filters: RetrievalFilter | None = None,) -> list[tuple[DocumentChunk, float]]:
         """中文全文检索 Top-K：websearch_to_tsquery + ts_rank。
 
         ts_query 是 tokenizer.build_tsquery() 生成的 OR 表达式，
@@ -245,7 +247,7 @@ class DocumentChunkRepository:
             # 过滤条件
             .where(
                 # 条件 A：只检索那些已经解析完成（ready）的文档，避免搜到半成品
-                Document.status == "ready",
+                *_document_filter_conditions(filters),
                 # 条件 B：【核心匹配逻辑】使用 PostgreSQL 的 "@@" 操作符。
                 # 判断左边（文本向量 content_tsv）是否匹配右边（查询向量 tsquery）。
                 DocumentChunk.content_tsv.op("@@")(tsquery),
@@ -265,3 +267,38 @@ class DocumentChunkRepository:
         # 5. 整理并返回结果
         # 使用列表推导式解包，并将数据库返回的 Decimal 类型的分数强转为 Python 原生的 float 类型
         return [(chunk, float(rank)) for chunk, rank in rows]
+
+
+# 定义工具函数：根据前端传来的过滤条件，动态生成 SQLAlchemy 的 WHERE 查询子句列表。
+# 参数 filters：领域模型中的不可变过滤对象（可能为 None，表示用户没有选任何额外过滤条件）。
+def _document_filter_conditions(filters: RetrievalFilter | None) -> list:
+    # 1. 【强制基础条件】：默认只能检索“已经处理完成（ready）”的文档。
+    # 这是整个 RAG 系统的底线，防止那些正在解析中、或者解析失败的半成品文档被误搜出来。
+    conditions = [Document.status == "ready"]
+
+    # 2. 防御性判断：如果前端根本没有传额外过滤条件，直接把基础条件返回。
+    if filters is None:
+        return conditions
+
+    # 3. 动态追加：文件类型过滤（MIME Types）。
+    # 如果用户传了文件类型（如 ["application/pdf"]），就生成一个 IN 查询条件。
+    if filters.mime_types:
+        conditions.append(Document.mime_type.in_(filters.mime_types))
+
+    # 4. 动态追加：文档创建时间的起始边界。
+    # 注意用 `is not None` 而不是 `if filters.created_from`，防止 datetime 的边界值（如 Unix 纪元 0）被误判为 False。
+    if filters.created_from is not None:
+        conditions.append(Document.created_at >= filters.created_from)
+
+    # 5. 动态追加：文档创建时间的结束边界。
+    if filters.created_to is not None:
+        conditions.append(Document.created_at <= filters.created_to)
+
+    # 6. 动态追加：指定特定文档 ID 列表进行检索。
+    # 如果用户只想在某几篇特定的文档中搜索，就会触发这个 IN 条件。
+    if filters.document_ids:
+        conditions.append(Document.id.in_(filters.document_ids))
+
+    # 7. 返回组装好的条件列表。
+    # 调用方通常会在后续使用：`select(...).where(*conditions)`，利用 Python 的 * 解包语法将所有条件用 AND 连接起来。
+    return conditions

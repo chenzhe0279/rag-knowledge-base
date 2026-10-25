@@ -167,7 +167,7 @@ export function QueryRoutePanel({
         <div className="chat-route-debug__footer">
           <span>
             <i aria-hidden="true" />
-            route_query → vector_search
+            route_query → hybrid_retrieve → rrf_fuse
           </span>
           <code>{route.route}</code>
         </div>

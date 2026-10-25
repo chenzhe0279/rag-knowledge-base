@@ -31,14 +31,14 @@ export const QUERY_ROUTE_META: Record<QueryRouteValue, QueryRouteMeta> = {
   multi_query: {
     label: '多路查询',
     caption: 'MULTI-QUERY',
-    description: '从多个角度拆解问题并多路召回，同一个文本块会按最高分去重合并。',
+    description: '从多个角度拆解问题并多路召回，同一个文本块会按 RRF 分去重合并。',
     tone: 'amber',
   },
   rewrite_multi_query: {
     label: '改写 + 多路查询',
     caption: 'REWRITE → MULTI',
     description:
-      '先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果拆成多条子查询，合并多路召回。',
+      '先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果拆成多条子查询，按 RRF 合并多路召回。',
     tone: 'fusion',
   },
 }

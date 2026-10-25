@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.util import await_
 
 from app.core.logger import get_logger
+from app.retrieval.filters import RetrievalFilter
 from app.retrieval.vector_retriever import RetrievedChunk
 from uuid import UUID
 from app.core.exceptions import NotFoundError
@@ -79,7 +80,7 @@ class ChatService:
 
 
     # 定义异步生成器方法：处理流式问答，逐个事件（Event）向前端 yield SSE（Server-Sent Events）数据
-    async def stream_answer(self, conversation_id: UUID, question: str) -> AsyncIterator[dict]:
+    async def stream_answer(self, conversation_id: UUID, question: str,  filters: RetrievalFilter | None = None,) -> AsyncIterator[dict]:
         """逐事件 yield SSE 载荷。
 
         事件协议（与前端约定）：
@@ -102,6 +103,8 @@ class ChatService:
                     "conversation_id": conversation_id,
                     # 存入用户当前问题
                     "question": question,
+                    # 存入检索过滤器
+                    "filters": filters,
                 }
 
                 # 1. 加载上下文（仅历史消息，本轮 user 此刻尚未入库）+ 改写查询 + 路由
@@ -261,6 +264,9 @@ class ChatService:
                 # rewritten_query(改写后文本)、hyde_answer(假设文档) 等打包成一个干净的字典。
                 # 这样前端不仅能展示最终回答，还能像上帝视角一样看到 AI 在后台是怎么思考和检索的。
                 "query_route": _build_query_route_payload(state),
+
+                # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
+                "retrieval_filters": _build_filter_payload(state.get("filters")),
             },
         )
         # 将 AI 消息实体添加到会话中（生成主键）
@@ -401,4 +407,32 @@ def _build_retrieval_meta(chunk: RetrievedChunk) -> dict:
         "rrf_score": (
             round(chunk.rrf_score, 6) if chunk.rrf_score is not None else None
         ),
+    }
+
+
+
+def _build_filter_payload(filters: RetrievalFilter | None) -> dict | None:
+    # 1. 防御性判断：如果传入的过滤条件是 None（用户没有使用任何过滤），直接返回 None。
+    if filters is None:
+        return None
+
+    # 2. 开始组装并返回字典（Payload）。
+    return {
+        # 【转换元组】：领域模型里是 tuple，JSON 不支持 tuple，所以用 list() 转为列表。
+        "mime_types": list(filters.mime_types),
+
+        # 【转换时间】：JSON 不支持 datetime 对象。
+        # 使用三元表达式：如果时间不为 None，就调用 .isoformat() 转成类似 "2026-10-25T12:00:00" 的标准字符串。
+        "created_from": (
+            filters.created_from.isoformat() if filters.created_from else None
+        ),
+
+        # 同理，把结束时间转为 ISO 格式字符串。
+        "created_to": (
+            filters.created_to.isoformat() if filters.created_to else None
+        ),
+
+        # 【转换 UUID】：JSON 不支持 UUID 对象。
+        # 遍历文档 ID 元组，把每一个 UUID 强制转换为普通字符串（str）。
+        "document_ids": [str(item) for item in filters.document_ids],
     }
