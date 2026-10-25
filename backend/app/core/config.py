@@ -108,6 +108,13 @@ class Settings(BaseSettings):
     # Multi-Query 策略生成的子查询数量，过大会增加 embedding 成本
     multi_query_count: int = 3
 
+    # ===== 混合检索 =====
+    # 每路（向量 / 关键词）召回数量；设计文档建议候选 20-50
+    # 取 20 兼顾召回率与 RRF 融合开销
+    retrieval_recall_top_k: int = 20
+    # RRF 平滑常数，业界一般用 60；越小越偏向高排名条目
+    rrf_k: int = 60
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

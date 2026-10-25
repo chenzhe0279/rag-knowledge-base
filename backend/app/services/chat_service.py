@@ -129,7 +129,7 @@ class ChatService:
                 }
                 # 3. retrieve（含拒答判定）-> 先把引用发给前端，让参考资料面板立刻可见
                 # 调用 retrieve 节点，去向量数据库检索相关文本块，并判断是否需要拒答
-                state.update(await retrieve(state, session))
+                state.update(await retrieve(state))
 
                 #  先获取检索到的文本块列表，如果 state 里没有，默认给个空列表 [] 防止报错
                 retrieved_chunks = state.get("retrieved_chunks", [])
@@ -294,6 +294,8 @@ class ChatService:
                     page_no=chunk.page_no,
                     # 冗余快照：引用的原文内容
                     quote=chunk.content,
+                    # 混合检索的元数据，供前端调试面板展示
+                    retrieval_meta=_build_retrieval_meta(chunk),
                 )
 
                 # 5. 将实例化好的对象追加到列表中
@@ -334,6 +336,8 @@ def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:
         "score": round(chunk.score, 4),
         # 引用的具体原文内容，供前端悬浮展示
         "quote": chunk.content,
+        # 混合检索的元数据，供前端调试面板展示
+        "retrieval_meta": _build_retrieval_meta(chunk),
     }
 
 
@@ -360,4 +364,41 @@ def _build_query_route_payload(state: RAGState) -> dict:
 
         # 5. 多路查询生成的子查询列表。如果没走 multi_queries 策略，这里就是 None。
         "multi_queries": state.get("multi_queries"),
+    }
+
+
+def _build_retrieval_meta(chunk: RetrievedChunk) -> dict:
+    """混合检索调试元数据"""
+    # 返回一个字典，包含这条引用是“怎么被搜出来的”所有证据
+    return {
+        # 1. 来源渠道：记录它是被向量召回、关键词召回，还是双路都召回了。
+        # 注意：chunk.sources 原本是个 tuple（元组），这里用 list() 转成列表。
+        "sources": list(chunk.sources),
+
+        # 2. 向量检索排名（如 1, 2, 3），如果没走向量检索，这里就是 None。
+        "vector_rank": chunk.vector_rank,
+
+        # 3. 向量原始得分（余弦相似度）。
+        # 使用三元表达式进行空值保护：如果不为 None，就保留 4 位小数；如果是 None，就原样返回 None。
+        # 为什么要 round(..., 4)？因为浮点数可能会产生 0.849999999999 这种长尾数字，截断精度能有效减小 JSON 体积。
+        "vector_score": (
+            round(chunk.vector_score, 4) if chunk.vector_score is not None else None
+        ),
+
+        # 4. 关键词检索排名（如 1, 2, 3），如果没走关键词检索，这里就是 None。
+        "keyword_rank": chunk.keyword_rank,
+
+        # 5. 关键词原始得分（ts_rank）。
+        # 同样保留 4 位小数并做 None 值保护。因为 ts_rank 的数值通常较小，保留 4 位足够体现差异。
+        "keyword_score": (
+            round(chunk.keyword_score, 4) if chunk.keyword_score is not None else None
+        ),
+
+        # 6. RRF 融合得分。
+        # 【注意】这里保留的是 6 位小数（而不是 4 位）！
+        # 因为 RRF 公式是 1 / (k + rank)，算出来的分数非常小（通常在 0.01 ~ 0.03 之间）。
+        # 如果只保留 4 位，很多得分会变成 0.0161 和 0.0162 这种差距极小的数字，保留 6 位能让调试面板看得更精准。
+        "rrf_score": (
+            round(chunk.rrf_score, 6) if chunk.rrf_score is not None else None
+        ),
     }

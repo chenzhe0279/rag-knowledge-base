@@ -101,7 +101,7 @@ def _merge_chunks(bundles: list[list[RetrievedChunk]], top_k: int) -> list[Retri
             # 3. 【关键比较】：如果当前 chunk 是第一次出现（prev 为 None），
             # 或者当前 chunk 的得分（score）比字典里存的旧记录更高。
             # 因为不同子查询搜出来的同一个 chunk，相似度得分可能不一样，我们要保留最高的。
-            if prev is None or chunk.score > prev.score:
+            if prev is None or (chunk.rrf_score or 0.0) > (prev.rrf_score or 0.0):
                 # 用得分更高的替换/写入字典
                 best[key] = chunk
 
