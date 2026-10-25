@@ -1,18 +1,20 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.llm.prompts import REFUSAL_ANSWER
+from app.retrieval.hybrid_retriever import HybridRetriever
 from app.retrieval.vector_retriever import VectorRetriever, RetrievedChunk
 from app.workflows.rag_state import RAGState
 
 
 # 定义异步节点函数：执行向量检索并根据检索质量决定是否拒答
-# 接收当前的 RAG 全局状态 state 和数据库会话 session
-async def retrieve(state: RAGState, session: AsyncSession) -> RAGState:
+async def retrieve(state: RAGState) -> RAGState:
     # 1. 实例化向量检索器（封装了 pgvector 的检索逻辑）
-    retriever = VectorRetriever(session)
+    retriever = HybridRetriever()
+
+    recall_top_k = settings.retrieval_recall_top_k
 
     # 2. 从配置中读取本次检索需要返回的 Top-K 数量
-    top_k = settings.retrieval_top_k
+    final_top_k = settings.retrieval_top_k
 
     # 3. 判断是否开启了多路查询（Multi-Query）策略，并且确实生成了子查询列表
     if state.get("multi_queries"):
@@ -23,19 +25,19 @@ async def retrieve(state: RAGState, session: AsyncSession) -> RAGState:
         # 遍历所有的子查询（使用 or [] 兜底，防止空值报错）
         for sub_query in state["multi_queries"] or []:
             # 对每个子查询执行向量检索，拿到结果列表，并追加到 bundles 中
-            bundles.append(await retriever.search(sub_query, top_k=top_k))
+            bundles.append(await retriever.search(sub_query,  recall_top_k=recall_top_k,  final_top_k=final_top_k))
 
         # 【核心逻辑】将多路召回的结果进行去重、合并，并截取最终的 Top-K
-        chunks = _merge_chunks(bundles, top_k=top_k)
+        chunks = _merge_chunks(bundles, top_k=final_top_k)
     else:
         # 如果不是多路查询策略（比如 original, rewrite, hyde），就只用单条查询进行检索
         # 注意：这里的 state["query"] 可能是原问题，也可能是改写后的问题，或者是假设性文档（HyDE）
-        chunks = await retriever.search(state["query"], top_k=top_k)
+        chunks = await retriever.search(state["query"], recall_top_k=recall_top_k,  final_top_k=final_top_k)
 
     # 4. 触发拒答机制的判定逻辑：
     # 条件 A: chunks 为空列表（完全没搜到）
     # 条件 B: 得分最高的那条（chunks[0]）的分数，依然低于我们在配置文件中设定的最低阈值（比如 0.6）
-    refused = not chunks or chunks[0].score < settings.retrieval_min_score
+    refused = _should_refuse(chunks)
 
     # 5. 构建要返回给 LangGraph 的状态更新字典
     update: RAGState = {
@@ -49,6 +51,31 @@ async def retrieve(state: RAGState, session: AsyncSession) -> RAGState:
 
     # 返回局部更新的状态字典，供下一个节点使用
     return update
+
+
+# 定义辅助函数：用于判定混合检索后的结果，是否应该触发“拒答”机制
+def _should_refuse(chunks: list[RetrievedChunk]) -> bool:
+    """混合检索后的拒答判定，仅看 Top1 的语义相关度。"""
+
+    # 1. 防御性判断：如果检索结果为空列表，说明完全没找到任何相关内容，必须拒答。
+    if not chunks:
+        return True
+
+    # 2. 取出排名第一（综合得分最高）的文本块。
+    # 因为数据已经排好序了，Top1 代表了本次检索的最优结果。
+    top = chunks[0]
+
+    # 3. 【核心业务逻辑】：判断 Top1 是否缺乏“语义佐证”。
+    # 在混合检索中，如果一个块仅靠关键词（ts_rank）命中，它的 vector_score 就是 None。
+    # 为什么这种情况要拒答？因为纯字面匹配很容易产生误导（比如用户问“Python”，搜到了包含“Python”字样的无关代码）。
+    # 如果 Top1 连向量语义分都没有，说明大模型认为它和用户问题“毫不相干”，这种结果送给 LLM 极易产生幻觉，不如直接拒答。
+    if top.vector_score is None:
+        return True  # Top1 仅命中关键词路，缺乏语义佐证
+
+    # 4. 如果 Top1 有向量相似度得分，则将其与配置文件中设定的最低阈值（如 0.6）进行比较。
+    # 如果低于阈值，说明即使是第一名，语义相似度也太低了，判定为“不可用”，返回 True 触发拒答。
+    # 如果大于等于阈值，说明检索质量合格，返回 False，允许继续走大模型生成流程。
+    return top.vector_score < settings.retrieval_min_score
 
 
 # 定义辅助函数：用于合并多路召回的结果，去重并重新排序
