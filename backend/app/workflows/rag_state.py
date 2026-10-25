@@ -43,6 +43,35 @@ class RAGState(TypedDict, total=False):
     # 是否触发拒答（检索不足）。如果为 True，则直接跳过后续的 generate 生成节点，直接走拒答逻辑。
     refused: bool
 
+    # ====== Agentic RAG 循环相关的状态字段 ======
+    # 这些字段被定义在 RAGState（或类似的状态机）中，用于驱动和控制智能体的多轮检索循环。
+
+    # 1. 智能体思考与行动的完整轨迹记录。
+    # 这是一个列表，列表中的每一项是一个字典，记录了智能体在某一轮的“决策”和“观察结果”。
+    # 字典的典型结构包含：
+    #   round: 当前是第几轮检索
+    #   action: 采取的动作（如"检索"、"直接回答"、"结束"）
+    #   reason: LLM 做出该决策的原因（推理过程）
+    #   route: 采用的检索策略（向量/关键词/混合）
+    #   query: 实际使用的检索词
+    #   retrieved_count: 本轮召回的文本块数量
+    #   top_score: 本轮召回的最高得分
+    #   sufficient: 本轮检索到的信息是否足以回答用户问题
+    # 这样设计是为了将“决策（plan）”和“结果（observe）”合并记录在同一个步骤中，方便前端完整回溯 Agent 的思考链路。
+    # 由 plan_retrieval 追加"决策"字段、observe_context 回填"观察"字段，避免分两条记录
+    agent_steps: list[dict]
+
+    # 2. 当前检索轮次（计数器）。
+    # 每循环一次（如触发一次 plan -> retrieve -> observe），该数字递增。
+    # 主要用来和配置项 agent_max_rounds（最大轮次）做比对，防止 Agent 陷入无限死循环，保护大模型 Token 和 API 费用。
+    retrieval_round: int
+
+    # 3. 上下文充足性判定标记（循环退出条件）。
+    # 由 observe_context 节点产出。它会基于检索结果来评估：“当前找到的内容，够不够回答用户的问题？”
+    # - 如果为 True：说明信息已经足够，工作流图（Graph）会直接走向 END 节点，跳出循环，开始生成最终回答。
+    # - 如果为 False：说明信息不足，工作流会走回 plan_retrieval 节点，让 LLM 重新改写查询词，进行下一轮检索。
+    context_sufficient: bool
+
     # ==================== generate 节点产出 ====================
 
     # 大模型基于检索到的上下文和历史对话生成的最终回答

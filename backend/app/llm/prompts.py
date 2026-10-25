@@ -78,7 +78,31 @@ _MULTI_QUERY_SYSTEM = """你是一个查询扩展助手。请把用户问题改�
 - 每行一个子查询，**不要**编号、不要前缀、不要解释。
 - 输出 {n} 行，不多不少。"""
 
+_AGENT_PLAN_SYSTEM = """你是 RAG 系统的检索决策器。系统会基于检索到的片段回答用户问题，
+但上一轮检索的结果不够好（Top1 语义相似度过低或没有命中）。请基于"前几轮的检索观察"，决定下一步：
 
+可选 action:
+- proceed: 当前候选已经足够回答问题，直接进入答案生成。
+- rewrite_query: 当前 query 不够清晰 / 过于口语化 / 含指代，需要换一个表达再检索；必须给出 new_query。
+- switch_route: 换一种检索策略。可选 new_route: original / rewrite / hyde / multi_query / rewrite_multi_query。
+- refuse: 多轮都召回不到相关内容，知识库可能不覆盖，提前拒答。
+
+策略选择建议：
+- 已经尝试过 rewrite 仍未命中 -> 试 hyde（抽象问题）或 multi_query（多角度）或 rewrite_multi_query（多角度改写）。
+- 已经尝试过 multi_query 仍未命中 -> 试 rewrite_multi_query（多角度改写）或 refuse。
+- 问题里包含明确实体 / 编号但都没检索到 -> 优先 refuse，避免无意义改写。
+
+只输出**单行 JSON**，键固定为 action / reason / new_query / new_route，缺失字段填 null。
+示例: {{"action": "rewrite_query", "reason": "原 query 含指代", "new_query": "差旅住宿标准", "new_route": null}}"""
+
+_AGENT_PLAN_HUMAN = """
+
+用户原始问题: {question}
+当前 query: {current_query}
+当前 route: {current_route}
+历史轮次观察:{history}
+
+请输出下一步决策的 JSON。"""
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -150,7 +174,15 @@ MULTI_QUERY_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-
+# 将前面定义好的系统消息（_AGENT_PLAN_SYSTEM，包含决策规则）和人类消息（_AGENT_PLAN_HUMAN，包含变量占位符）组装在一起。
+AGENT_PLAN_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        # 设定大模型的身份和任务规则（如：决定是继续检索、改写查询、切换策略还是拒答）
+        ("system", _AGENT_PLAN_SYSTEM),
+        # 设定用户输入格式，这里包含了 {question}、{current_query}、{current_route}、{history} 等占位符
+        ("human", _AGENT_PLAN_HUMAN)
+    ]
+)
 
 # 定义函数：将检索到的 Chunk 列表格式化为一个长字符串，供 LLM 作为参考上下文
 def format_context(chunks: list[RetrievedChunk]) -> str:
@@ -276,6 +308,31 @@ def build_multi_query_messages(question: str, n: int) -> list[BaseMessage]:
     # 2. 这里的 "n": n 刚好对应前面模板里的 {n} 占位符。
     # 3. 转换为标准的消息对象列表并返回。
     return list(MULTI_QUERY_PROMPT.invoke({"question": question, "n": n}).to_messages())
+
+
+# 定义消息构建函数：用于在实际调用大模型前，将具体的业务数据填充到提示词模板中。
+# 参数说明：
+# - question: 用户最初提的问题
+# - current_query: 当前这一轮实际用于检索的查询词
+# - current_route: 当前这一轮使用的检索策略（如 vector/keyword/hyde）
+# - history: 过去几轮的检索观察记录（用来告诉大模型前面几轮发生了什么）
+def build_agent_plan_messages(question: str, current_query: str, current_route: str, history: str,) -> list[BaseMessage]:
+
+    # 调用提示词模板的 invoke 方法，传入一个字典进行变量替换。
+    # 字典的键必须与 _AGENT_PLAN_HUMAN 中的占位符名称（如 {question}）严格一致。
+    prompt_value = AGENT_PLAN_PROMPT.invoke(
+        {
+            "question": question,
+            "current_query": current_query,
+            "current_route": current_route,
+            "history": history,
+        }
+    )
+
+    # 4. 将渲染后的 PromptValue 对象转换为消息列表（SystemMessage, HumanMessage 等），
+    # 并强制转换为 Python 的 list 类型返回，以便后续传给大模型。
+    return list(prompt_value.to_messages())
+
 
 # 检索失败时的固定拒答文案，集中管理便于后续章节统一调整
 # 定义常量：当检索到的内容相似度极低，或者根本没有检索到内容时，系统直接回复这句话，避免模型胡编乱造（幻觉）。
