@@ -37,6 +37,40 @@ class ConversationRead(BaseModel):
     # 会话最后更新时间
     updated_at: datetime
 
+class RetrievalMeta(BaseModel):
+    """混合检索调试元数据。
+
+    - sources: 该 chunk 命中的检索路（vector / keyword），两路都命中即"混合"
+    - *_rank: 在该路召回结果中的名次（从 1 开始），用于复盘排序
+    - vector_score: cosine similarity，绝对值有意义，做拒答阈值用
+    - keyword_score: ts_rank，相对值，跨 query 不可比
+    - rrf_score: 两路融合分，仅在同一次检索内可比
+    """
+
+    # 记录召回来源（如 ["vector"] 或 ["vector", "keyword"]）。
+    # 【重要】这里必须使用 Field(default_factory=list)，绝不能写成 `= []`。
+    # 因为列表是可变对象，直接赋值会导致所有实例共享同一个列表。
+    # default_factory 保证每次实例化时都会创建一个全新的空列表。
+    sources: list[str] = Field(default_factory=list)
+
+    # 向量检索排名（如 1, 2, 3）。如果未命中向量路，则为 None。
+    vector_rank: int | None = None
+
+    # 向量检索的原始相似度得分。
+    # 这个分数是绝对值（0~1 之间），所以可以用于全局的“拒答阈值”判断。
+    vector_score: float | None = None
+
+    # 关键词检索排名（如 1, 2, 3）。如果未命中关键词路，则为 None。
+    keyword_rank: int | None = None
+
+    # 关键词检索的原始得分（ts_rank）。
+    # 这个分数是相对值（没有上界），所以只能用来在同一次查询的结果中排序，不能跨查询比较。
+    keyword_score: float | None = None
+
+    # 融合得分（RRF）。数值很小（如 0.016），且只能在当前这次检索的结果中互相比较大小。
+    rrf_score: float | None = None
+
+
 
 # 读取引用信息的响应模型（用于展示 AI 回答引用的出处）
 class CitationRead(BaseModel):
@@ -60,6 +94,8 @@ class CitationRead(BaseModel):
     page_no: int | None = None
     # 引用的原文内容
     quote: str
+    # 混合检索的调试元数据，可能为空
+    retrieval_meta: RetrievalMeta | None = None
 
     # 类方法：将数据库的 ORM 引用对象转换为当前的 Pydantic 响应模型
     @classmethod
@@ -74,6 +110,25 @@ class CitationRead(BaseModel):
             page_no=citation.page_no,
             quote=citation.quote,
         )
+
+
+# 定义解析函数：将数据库里 JSONB 类型的原始字典，安全地转为 RetrievalMeta 模型对象
+def _parse_retrieval_meta(raw: dict | None) -> RetrievalMeta | None:
+    """历史消息没有 retrieval_meta，非法/缺失时静默返回 None。"""
+
+    # 1. 防御性类型检查：如果传入的数据不是字典（比如是 None、字符串或列表），直接返回 None
+    if not isinstance(raw, dict):
+        return None
+
+    # 2. 开启异常捕获：防止脏数据导致 Pydantic 校验失败，进而引发整个接口崩溃
+    try:
+        # 使用 Pydantic 的 model_validate 进行严格的类型校验和转换
+        return RetrievalMeta.model_validate(raw)
+
+    # 3. 静默容错：如果解析失败（比如历史旧数据缺少必填字段、类型不匹配），直接返回 None。
+    # 这种做法能保证“向后兼容”，绝不会因为一条古老的数据格式不对，就让前端的整个历史消息列表加载失败。
+    except Exception:
+        return None
 
 
 # 读取消息信息的响应模型
@@ -173,3 +228,5 @@ class ConversationDetail(BaseModel):
 class ChatRequest(BaseModel):
     # 用户提出的问题文本：最小长度为1（不能发空消息），最大长度限制为2000个字符（防止 token 超限或恶意刷屏）
     question: str = Field(min_length=1, max_length=2000)
+
+
