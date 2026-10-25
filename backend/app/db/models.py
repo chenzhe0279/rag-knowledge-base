@@ -161,11 +161,22 @@ class DocumentChunk(Base):
         "metadata", JSONB, nullable=False, default=dict
     )
 
-    # 中文全文检索索引列。
-    # GENERATED ALWAYS 由 PostgreSQL 根据 content_tokens 自动维护，应用层不写、只读。
+    # ===== 中文全文检索专用索引列 =====
+    # 这是一个 PostgreSQL 的“生成列（Generated Column）”。
+    # 它的值不需要（也不允许）在 Python 代码中手动赋值，完全由数据库根据 content_tokens 自动计算并维护。
     content_tsv: Mapped[str] = mapped_column(
+        # 1. 指定数据库列类型为 TSVECTOR。
+        # 这是 PostgreSQL 专有的数据类型，专门用于存储经过优化的、带位置信息的“词元（lexemes）”。
         TSVECTOR,
+
+        # 2. 定义生成规则（Computed）。
+        # 底层生成的 SQL 是：GENERATED ALWAYS AS (...) STORED。
+        # 它告诉数据库：请拿着 content_tokens 列里的内容，使用 'simple' 配置（仅按空格切词、转小写，不做词干还原），
+        # 调用 to_tsvector 函数，将其转换为 TSVECTOR 格式。
         Computed("to_tsvector('simple'::regconfig, content_tokens)", persisted=True),
+
+        # 3. 限制该列不能为空。
+        # 只要 content_tokens 有值，算出来的 content_tsv 就一定会有值。
         nullable=False,
     )
 
@@ -348,6 +359,16 @@ class AnswerCitation(Base):
     page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # 冗余存储的引用原文（快照）：即使源 chunk 被修改或删除，这里依然保存着当时 LLM 引用的具体文字内容，使用 Text 类型，不允许为空。
+    """
+    {
+     "sources": ["vector", "keyword"], // 来源：说明这个词是被向量检索、关键词检索、还是两者同时命中的
+     "vector_score": 0.85,             // 向量余弦相似度得分
+     "keyword_score": 0.42,            // PostgreSQL ts_rank 算出来的得分
+     "vector_rank": 3,                 // 在向量检索的 Top-K 列表里，它排第 3 名
+     "keyword_rank": 1,                // 在关键词检索的 Top-K 列表里，它排第 1 名
+     "rrf_score": 0.0322               // RRF 融合算法最终算出来的综合得分
+    }
+    """
     quote: Mapped[str] = mapped_column(Text, nullable=False)
 
     # 混合检索调试元数据：sources / vector_rank / keyword_rank / *_score / rrf_score。

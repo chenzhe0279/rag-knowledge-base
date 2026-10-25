@@ -210,11 +210,8 @@ class DocumentChunkRepository:
         # 返回包含 (chunk, distance) 元组的列表
         return result
 
-    async def keyword_search(
-        self,
-        ts_query: str,
-        top_k: int,
-    ) -> list[tuple[DocumentChunk, float]]:
+    # 定义异步方法：执行基于关键词的中文全文检索
+    async def keyword_search(self, ts_query: str, top_k: int) -> list[tuple[DocumentChunk, float]]:
         """中文全文检索 Top-K：websearch_to_tsquery + ts_rank。
 
         ts_query 是 tokenizer.build_tsquery() 生成的 OR 表达式，
@@ -224,26 +221,47 @@ class DocumentChunkRepository:
         - 仅命中 status='ready' 文档，避免拿到尚未完成入库的脏 chunk
         - 返回 (chunk, ts_rank) 列表，ts_rank 越大越相关
         """
-        # 第一个参数必须是 regconfig 类型，不能是普通字符串。
-        # SQLAlchemy 对字符串参数会尝试自动 cast；用 literal_column 显式写成
-        # 'simple'::regconfig 最稳，避免不同版本下报 "function does not exist"。
+
+        # 1. 构建全文检索的查询语句（tsquery）
+        # websearch_to_tsquery 的第一个参数必须是 PostgreSQL 的 regconfig 类型，不能是普通的字符串。
+        # 如果直接传字符串 'simple'，SQLAlchemy 可能会把它作为普通文本参数处理，导致数据库报错 "function does not exist"。
+        # 使用 literal_column("'simple'::regconfig") 可以直接将这段强转语法的字面量注入 SQL，确保 100% 兼容所有版本。
+        # 为什么用 'simple' 配置？因为我们在入库前已经用 jieba 做好了完美的预分词（词之间带空格），不需要数据库再乱切了。
         tsquery = func.websearch_to_tsquery(
             literal_column("'simple'::regconfig"),
             ts_query,
         )
+
+        # 2. 计算相关性得分（ts_rank）
+        # 根据词汇在文本中出现的频率等维度，算出一个浮动得分。
         rank_expr = func.ts_rank(DocumentChunk.content_tsv, tsquery)
 
+        # 3. 构建完整的 SQLAlchemy 查询语句
         stmt = (
+            # 选取 DocumentChunk 实体，并将计算出的得分命名为 "rank"
             select(DocumentChunk, rank_expr.label("rank"))
+            # 关联 Document 表，为了去校验文档状态
             .join(Document, Document.id == DocumentChunk.document_id)
+            # 过滤条件
             .where(
+                # 条件 A：只检索那些已经解析完成（ready）的文档，避免搜到半成品
                 Document.status == "ready",
+                # 条件 B：【核心匹配逻辑】使用 PostgreSQL 的 "@@" 操作符。
+                # 判断左边（文本向量 content_tsv）是否匹配右边（查询向量 tsquery）。
                 DocumentChunk.content_tsv.op("@@")(tsquery),
             )
+            # 排序规则：根据得分降序排列（分数越高的，匹配度越好，排越前面）
             .order_by(rank_expr.desc())
+            # 只取前 top_k 条结果
             .limit(top_k)
+            # 预加载优化：一次性把关联的 Document 对象查出来，防止后续访问时触发 N+1 查询
             .options(selectinload(DocumentChunk.document))
         )
 
+        # 4. 执行查询，获取所有结果行
+        # 每一行是一个元组，包含 (DocumentChunk 对象, 相关性得分)
         rows = (await self.session.execute(stmt)).all()
+
+        # 5. 整理并返回结果
+        # 使用列表推导式解包，并将数据库返回的 Decimal 类型的分数强转为 Python 原生的 float 类型
         return [(chunk, float(rank)) for chunk, rank in rows]
