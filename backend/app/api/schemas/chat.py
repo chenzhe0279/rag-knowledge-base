@@ -10,6 +10,47 @@ MessageRoleValue = Literal["user", "assistant", "system"]
 
 QueryRouteValue = Literal["original", "rewrite", "hyde", "multi_query", "rewrite_multi_query"]
 
+# 定义 Agent 动作的字面量类型（Literal）。
+# 严格限制 Agent 只能执行这 5 种动作，防止大模型胡编乱造出未知的 action。
+AgentActionValue = Literal["initial", "proceed", "rewrite_query", "switch_route", "refuse"]
+
+
+class AgentStep(BaseModel):
+    """Agentic RAG 单轮决策 + 观察快照。
+
+    plan_retrieval 先填决策字段 (round / action / reason / route / query)，
+    retrieve 跑完后 observe_context 回填观察字段 (retrieved_count / top_score / sufficient)
+    """
+
+    # 当前是第几轮思考（如 1, 2, 3）
+    round: int
+
+    # 本轮大模型做出的决策动作（如 "proceed", "rewrite_query" 等）
+    action: AgentActionValue
+
+    # 大模型做出该决策的推理原因（自然语言解释）
+    reason: str
+
+    # 本轮采用的检索路由策略（如 "original", "hyde", "multi_query"）
+    route: QueryRouteValue
+
+    # 本轮实际使用的查询词
+    query: str
+
+    # ================= 第二阶段：观察字段（由 observe_context 节点回填） =================
+    # 注意：这些字段默认值为 None，因为在 plan 阶段它们是未知的，必须等检索完成后才能填上。
+
+    # 本轮检索召回的文本块数量
+    retrieved_count: int | None = None
+
+    # 本轮召回的最高语义相似度得分
+    top_score: float | None = None
+
+    # 综合评估：本轮召回的内容是否足够回答问题（True/False）
+    sufficient: bool | None = None
+
+
+
 class QueryRouteRead(BaseModel):
     """Query 优化的调试快照。仅 assistant 消息会带，前端用于渲染调试面板。"""
 
@@ -148,6 +189,8 @@ class MessageRead(BaseModel):
     citations: list[CitationRead] = Field(default_factory=list)
     # assistant消息的query路由调试信息; user / 旧消息为None
     query_route: QueryRouteRead | None = None
+    # Agentic RAG 决策轨迹；user / 旧消息 / 关闭 agent loop 时为 None
+    agent_steps: list[AgentStep] | None = None
 
     # 定义类方法：将数据库的 Message ORM 对象转换为当前的 Pydantic 响应模型
     @classmethod
@@ -172,6 +215,15 @@ class MessageRead(BaseModel):
             # 如果是用户提问：没有路由信息，给 None
             query_route = None
 
+        # ---------- 2. 处理 agent_steps 字段 ----------
+        if is_assistant:
+            # 如果是 AI 消息：去解析扩展元数据里的智能体决策轨迹
+            agent_steps = _parse_agent_steps(message.extra_metadata)
+        else:
+            # 如果是用户消息：没有轨迹，给 None
+            agent_steps = None
+
+
         # 最后，把所有组装好的数据返回给 Pydantic 模型
         return cls(
             id=message.id,
@@ -179,7 +231,8 @@ class MessageRead(BaseModel):
             content=message.content,
             created_at=message.created_at,
             citations=citations,  # 传入上面计算好的引用列表
-            query_route=query_route,  # 传入上面计算好的路由信息
+            query_route=query_route,# 传入上面计算好的路由信息
+            agent_steps=agent_steps
         )
 
 
@@ -271,3 +324,43 @@ class ChatRequest(BaseModel):
     # 比如用户在前端勾选了“只搜索 PDF 文档”或者“只搜索上个月的文档”，就会传这个字段。
     # 类型为 RetrievalFilters 或 None（表示不限制检索范围）。
     filters: RetrievalFilters | None = None
+
+
+# 定义工具函数：从扩展元数据（JSONB）中解析出 Agent 的历史步骤列表。
+# 容错级别极高：只要数据缺失或格式非法，全部静默返回 None，绝不抛异常阻断业务。
+def _parse_agent_steps(metadata: dict | None) -> list[AgentStep] | None:
+    """从 messages.extra_metadata 解析 agent_steps；缺失 / 非法静默返回 None。"""
+
+    # 1. 第一层防御：如果 metadata 字典本身为空（老数据或用户消息），直接返回 None。
+    if not metadata:
+        return None
+
+    # 2. 从字典中提取出 agent_steps 对应的原始数据。
+    raw = metadata.get("agent_steps")
+
+    # 3. 第二层防御：检查提取出来的 raw 是不是列表，且不能是空列表。
+    # 如果是字典、字符串、数字，或者是空列表 []，统统视为无效数据，返回 None。
+    if not isinstance(raw, list) or not raw:
+        return None
+
+    # 4. 准备一个空列表，用于装载解析后强类型的 AgentStep 对象。
+    parsed: list[AgentStep] = []
+
+    # 5. 遍历列表中的每一个元素。
+    for item in raw:
+        # 6. 第三层防御：列表里的每个元素必须是一个字典，否则直接判定整体失败，返回 None。
+        if not isinstance(item, dict):
+            return None
+
+        # 7. 第四层防御（最严苛的一环）：利用 Pydantic 进行强类型校验。
+        try:
+            # 尝试把字典转换成 AgentStep 对象。如果字典里缺少必填字段（如 action），或者字段类型不对，这里会抛出异常。
+            parsed.append(AgentStep.model_validate(item))
+
+        except Exception:
+            # 8. 终极兜底：一旦 Pydantic 报错，直接把异常吞掉，返回 None。
+            # 【业务考量】：历史记录展示只是辅助功能。如果某条老数据格式不兼容，大不了前端不展示时间轴面板，但绝不能因为这个报 500 错误，导致整个聊天记录加载不出来。
+            return None
+
+    # 9. 只有所有元素都完美通过了校验，才会走到这里，返回真正的强类型列表。
+    return parsed

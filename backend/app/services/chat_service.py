@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator
 from app.db.models import AnswerCitation, Conversation, Message
 from app.db.repositories.citation_repo import AnswerCitationRepository
 from app.db.session import AsyncSessionLocal
+from app.workflows.graph import get_rag_graph
 from app.workflows.nodes import (
     load_context,
     normalize_query,
@@ -110,12 +111,12 @@ class ChatService:
                 # 1. 加载上下文（仅历史消息，本轮 user 此刻尚未入库）+ 改写查询 + 路由
                 # 调用 load_context 节点，从数据库拉取历史对话记录，并更新到 state 中
                 state.update(await load_context(state, session))
-                # 调用 normalize_query 节点，对用户问题进行规范化/改写，并更新到 state 中
-                state.update(await normalize_query(state))
-                # 调用 route_query 节点，根据配置的路由策略选择最终的查询文本，并更新到 state 中
-                state.update(await route_query(state))
 
-                # 2. user 消息落库
+                # 2. 跑 RAG 子图: normalize_query ->  route_query -> 检索决策循环
+                final_state = await get_rag_graph().ainvoke(state)
+                state.update(final_state) # type = ignore[arg-type]
+
+                # 3. user 消息落库
                 # 将用户本次的提问保存到数据库（独立提交），拿到 user_message_id，防止后续生成失败丢失用户提问
                 await self._persist_user_message(state, session)
 
@@ -130,25 +131,38 @@ class ChatService:
                     "event": "query_route",
                     "data": _build_query_route_payload(state),
                 }
+                # 调用 _serialize_agent_steps 函数，把 agent_steps 列表序列化为标准格式并推送给前端
+                yield {
+                    "event": "agent_steps",
+                    "data": {
+                        "steps": _serialize_agent_steps(state)
+                    },
+                }
                 # 3. retrieve（含拒答判定）-> 先把引用发给前端，让参考资料面板立刻可见
                 # 调用 retrieve 节点，去向量数据库检索相关文本块，并判断是否需要拒答
                 state.update(await retrieve(state))
 
-                #  先获取检索到的文本块列表，如果 state 里没有，默认给个空列表 [] 防止报错
-                retrieved_chunks = state.get("retrieved_chunks", [])
-
-                #  创建一个空列表，准备装序列化后的引用数据
+                # 1. 先准备一个空列表，用于存放最终结果
                 citations_payload = []
 
-                #  使用 enumerate 遍历列表。
-                # start=1 表示序号 i 从 1 开始（必须与 Prompt 里大模型看到的 [1]、[2] 严格对应）
-                for i, c in enumerate(retrieved_chunks, start=1):
-                    # 4. 调用 _serialize_citation 函数。
-                    # 传入当前的文本块 c，以及对应的序号 i
-                    serialized_item = _serialize_citation(c, ordinal=i)
+                # 2. 判断系统是否触发了“拒答（refused）”
+                if state.get("refused"):
+                    # 情况 A：触发了拒答（说明系统认为检索到的内容完全不够或质量太差）
+                    # 即使 agent 循环中途某一轮搜到了东西，我们也坚决不给前端展示这些参考资料。
+                    # 所以这里直接让它保持空列表 [] 即可，什么都不做。
+                    pass
+                else:
+                    # 情况 B：系统正常回答，需要把检索到的文本块打包成引用列表
+                    # 从 state 里安全取出检索到的文本块列表，如果没有则给个空列表兜底
+                    chunks = state.get("retrieved_chunks", [])
 
-                    # 5. 将处理好的字典追加到结果列表中
-                    citations_payload.append(serialized_item)
+                    # 使用 enumerate 遍历，start=1 表示序号从 1 开始（对应大模型回答里的 [1]、[2]）
+                    for i, c in enumerate(chunks, start=1):
+                        # 调用序列化函数，把文本块转为前端需要的格式，并传入序号 i
+                        item = _serialize_citation(c, ordinal=i)
+
+                        # 将打包好的引用对象塞进结果列表
+                        citations_payload.append(item)
 
                 # 发送第二个 SSE 事件：将引用列表（citations）推送给前端，让用户在AI回答前就能看到参考依据
                 yield {
@@ -267,6 +281,9 @@ class ChatService:
 
                 # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
                 "retrieval_filters": _build_filter_payload(state.get("filters")),
+
+                # 3. 记录 Agent 的执行步骤。
+                "agent_steps": _serialize_agent_steps(state),
             },
         )
         # 将 AI 消息实体添加到会话中（生成主键）
@@ -436,3 +453,29 @@ def _build_filter_payload(filters: RetrievalFilter | None) -> dict | None:
         # 遍历文档 ID 元组，把每一个 UUID 强制转换为普通字符串（str）。
         "document_ids": [str(item) for item in filters.document_ids],
     }
+
+
+# 定义工具函数：用于将当前状态中的 Agent 历史步骤，序列化为一个标准的 Python 字典列表。
+# 这个格式可以直接被 FastAPI 转成 JSON 返回给前端（SSE事件），或者直接存入数据库的 JSONB 字段。
+def _serialize_agent_steps(state: RAGState) -> list[dict]:
+    """SSE / metadata 共用的 agent_steps 载荷格式。
+
+    state 内字段全部用原生 Python 类型，直接 JSON 序列化即可；这里做一层显式拷贝
+    避免后续节点继续追加时影响已发出的事件 / 已持久化的 metadata。
+    """
+    # 1. 先准备一个空列表，用来装数据
+    result = []
+
+    # 2. 安全地从 state 里取出历史列表。如果 key 不存在，默认给一个空列表 []，防止报错。
+    raw_steps = state.get("agent_steps", [])
+
+    # 3. 遍历这个历史列表。这里的 step 是一个字典 (dict)。
+    for step in raw_steps:
+        # 4. 【核心操作】：对当前的字典进行一次浅拷贝（生成一个新的字典对象）
+        step_copy = dict(step)
+
+        # 5. 把拷贝出来的新字典塞进结果列表里
+        result.append(step_copy)
+
+    # 6. 返回最终组装好的新列表
+    return result
