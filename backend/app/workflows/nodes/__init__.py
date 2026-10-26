@@ -12,6 +12,10 @@ __all__ = [
     "load_context",
     # 规范化/改写用户查询的节点函数
     "normalize_query",
+    # 观察和记录对话上下文的节点函数
+    "observe_context",
+    # 计划检索的节点函数
+    "plan_retrieval",
     # 执行向量检索的节点函数
     "retrieve",
     # 执行查询路由的节点函数
