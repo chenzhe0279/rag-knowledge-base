@@ -3,6 +3,8 @@ from app.workflows.nodes.load_context import load_context
 from app.workflows.nodes.normalize_query import normalize_query
 from app.workflows.nodes.retrieve import retrieve
 from app.workflows.nodes.route_query import route_query
+from app.workflows.nodes.plan_retrieval import plan_retrieval
+from app.workflows.nodes.observe_context import observe_context
 
 # 定义 __all__ 变量
 # 作用 1：严格控制对外暴露的公共接口。当其他模块使用 `from app.workflows.nodes import *` 时，只会导入这个列表里列出的名字。

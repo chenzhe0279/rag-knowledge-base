@@ -3,7 +3,6 @@ import type { components } from './schema'
 /** 后端生成的会话类型。 */
 export type ConversationRead = components['schemas']['ConversationRead']
 export type ConversationDetail = components['schemas']['ConversationDetail']
-export type ApiMessageRead = components['schemas']['MessageRead']
 
 /**
  * 后端 OpenAPI 可能滞后，或缺少组合路由；前端保留 rewrite_multi_query 兼容，
@@ -15,6 +14,35 @@ export type QueryRouteValue =
   | 'rewrite_multi_query'
 export type QueryRoute = Omit<ApiQueryRoute, 'route'> & {
   route: QueryRouteValue
+}
+
+/** Agentic RAG 每轮允许的决策动作。 */
+export type AgentActionValue =
+  | 'initial'
+  | 'proceed'
+  | 'rewrite_query'
+  | 'switch_route'
+  | 'refuse'
+
+/**
+ * Agent 单轮“决策 + 观察”快照。
+ * 决策字段由 plan_retrieval 写入，观察字段由 observe_context 回填。
+ */
+export interface AgentStep {
+  round: number
+  action: AgentActionValue
+  reason: string
+  route: QueryRouteValue
+  query: string
+  retrieved_count?: number | null
+  top_score?: number | null
+  sufficient?: boolean | null
+}
+
+type ApiMessageReadBase = components['schemas']['MessageRead']
+/** 历史接口已返回 agent_steps，OpenAPI 未重新生成前先用可选字段承接。 */
+export type ApiMessageRead = Omit<ApiMessageReadBase, 'agent_steps'> & {
+  agent_steps?: unknown
 }
 
 /**
@@ -62,12 +90,16 @@ export interface ChatMessage {
   citations: ChatCitation[]
   /** 查询路由调试快照。旧消息或 user 消息为 null。 */
   queryRoute: QueryRoute | null
+  /** Agentic RAG 决策轨迹。旧消息、user 消息或关闭 Agent 循环时为 null。 */
+  agentSteps: AgentStep[] | null
 }
 
 export interface ChatStreamHandlers {
   onMessageStart?: (payload: { user_message_id: string }) => void
   /** query_route 事件：query 路由与改写策略的实时快照。 */
   onQueryRoute?: (route: QueryRoute) => void
+  /** agent_steps 事件：Agentic RAG 多轮决策与观察轨迹。 */
+  onAgentSteps?: (steps: AgentStep[]) => void
   onCitations?: (citations: ChatCitation[]) => void
   onToken?: (delta: string) => void
   onMessageEnd?: (payload: {

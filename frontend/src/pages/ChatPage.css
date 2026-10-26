@@ -197,6 +197,15 @@
   height: 11px;
 }
 
+.chat-agent-meta {
+  color: rgba(249, 234, 223, 0.72);
+}
+
+.chat-agent-meta .icon {
+  width: 11px;
+  height: 11px;
+}
+
 .chat-dot {
   width: 6px;
   height: 6px;
@@ -1279,6 +1288,276 @@
   animation: chat-route-pulse 1.4s ease-in-out infinite;
 }
 
+/* ---------- Agentic RAG 决策轨迹 ---------- */
+
+.chat-agent-debug {
+  --route-accent: #6d5a49;
+  --route-tint: rgba(109, 90, 73, 0.1);
+}
+
+.chat-agent-debug[data-outcome='sufficient'] {
+  --route-accent: #5f7048;
+  --route-tint: rgba(95, 112, 72, 0.12);
+}
+
+.chat-agent-debug[data-outcome='insufficient'] {
+  --route-accent: #8e6a2f;
+  --route-tint: rgba(142, 106, 47, 0.12);
+}
+
+.chat-agent-debug[data-outcome='refused'] {
+  --route-accent: #964b40;
+  --route-tint: rgba(150, 75, 64, 0.11);
+}
+
+.agent-trace__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.agent-trace__stat {
+  min-width: 0;
+  padding: 7px 8px 6px;
+  background: rgba(255, 255, 255, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.46);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+}
+
+.agent-trace__stat strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-trace__stat > span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-trace__stat--outcome strong {
+  color: var(--route-accent);
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: -0.01em;
+}
+
+.agent-trace__stat--outcome.is-sufficient strong {
+  color: #5f7048;
+}
+
+.agent-trace__stat--outcome.is-insufficient strong {
+  color: #8e6a2f;
+}
+
+.agent-trace__stat--outcome.is-refused strong {
+  color: #964b40;
+}
+
+.agent-trace__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 11px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-trace__step {
+  --step-accent: #806d5d;
+  --step-tint: rgba(128, 109, 93, 0.09);
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.agent-trace__step[data-action='proceed'] {
+  --step-accent: #5f7048;
+  --step-tint: rgba(95, 112, 72, 0.1);
+}
+
+.agent-trace__step[data-action='rewrite_query'] {
+  --step-accent: #9e5a37;
+  --step-tint: rgba(158, 90, 55, 0.1);
+}
+
+.agent-trace__step[data-action='switch_route'] {
+  --step-accent: #8e6a2f;
+  --step-tint: rgba(142, 106, 47, 0.1);
+}
+
+.agent-trace__step[data-action='refuse'] {
+  --step-accent: #964b40;
+  --step-tint: rgba(150, 75, 64, 0.1);
+}
+
+.agent-trace__step:not(:last-child)::before {
+  position: absolute;
+  top: 26px;
+  bottom: -7px;
+  left: 13px;
+  width: 1px;
+  content: '';
+  background: linear-gradient(
+    to bottom,
+    rgba(182, 109, 68, 0.25),
+    rgba(255, 255, 255, 0.06)
+  );
+}
+
+.agent-trace__marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--step-accent);
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  background: var(--step-tint);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.54);
+}
+
+.agent-trace__card {
+  min-width: 0;
+  padding: 8px 9px 9px;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.3),
+    rgba(255, 255, 255, 0.18)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.48);
+  border-radius: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.agent-trace__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.agent-trace__action {
+  padding: 2px 5px;
+  color: var(--step-accent);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--step-tint);
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 4px;
+}
+
+.agent-trace__route {
+  padding: 2px 5px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+}
+
+.agent-trace__route[data-route='rewrite'] {
+  color: #9e5a37;
+  background: rgba(182, 109, 68, 0.1);
+}
+
+.agent-trace__route[data-route='hyde'] {
+  color: #9b6273;
+  background: rgba(167, 110, 133, 0.1);
+}
+
+.agent-trace__route[data-route='multi_query'] {
+  color: #8e6a2f;
+  background: rgba(165, 125, 57, 0.11);
+}
+
+.agent-trace__route[data-route='rewrite_multi_query'] {
+  color: #a0603f;
+  background: rgba(182, 109, 68, 0.12);
+}
+
+.agent-trace__last {
+  margin-left: auto;
+  color: var(--route-accent);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.04em;
+}
+
+.agent-trace__reason {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  line-height: 1.55;
+}
+
+.agent-trace__query {
+  margin: 5px 0 0;
+  padding: 4px 6px;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  line-height: 1.55;
+  background: rgba(255, 255, 255, 0.24);
+  border-left: 2px solid var(--step-accent);
+  border-radius: 0 4px 4px 0;
+}
+
+.agent-trace__signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 7px;
+  color: var(--text-faint);
+  font-size: 6.5px;
+}
+
+.agent-trace__signals > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.agent-trace__signals strong {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 600;
+}
+
+.agent-trace__signals .is-ok {
+  color: #5f7048;
+}
+
+.agent-trace__signals .is-warn {
+  color: #8e6a2f;
+}
+
+.agent-trace__signals .is-muted,
+.agent-trace__signals .is-pending {
+  color: var(--text-faint);
+}
+
 /* ---------- 混合检索调试面板 ---------- */
 
 .chat-retrieval-debug {
@@ -1838,6 +2117,38 @@
 
   .chat-route-debug__step {
     padding: 4px 6px;
+  }
+
+  .agent-trace__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-trace__stat--outcome strong {
+    font-size: 9px;
+  }
+
+  .agent-trace__step {
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .agent-trace__step:not(:last-child)::before {
+    top: 22px;
+    left: 11px;
+  }
+
+  .agent-trace__marker {
+    width: 22px;
+    height: 22px;
+    font-size: 6px;
+  }
+
+  .agent-trace__reason {
+    font-size: 8px;
+  }
+
+  .agent-trace__query {
+    font-size: 7px;
   }
 
   .chat-rail {

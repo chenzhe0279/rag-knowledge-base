@@ -66,13 +66,16 @@ npm run dev
 ### 知识问答
 
 - 基于已入库文档的 RAG 问答，回答通过 **SSE** 流式返回
-- 支持 `message_start`、`query_route`、`citations`、`token`、`message_end`、`error` 事件
-- 查询路由调试：实时展示 `original` / `rewrite` / `hyde` / `multi_query` / `rewrite_multi_query` 策略
+- 支持 `message_start`、`query_route`、`agent_steps`、`citations`、`token`、`message_end`、`error` 事件
+- **Agentic RAG 决策轨迹**：逐轮展示 `initial` / `proceed` / `rewrite_query` / `switch_route` / `refuse` 动作、决策原因、实际 Query、召回数与 Top 语义相似度
+- 支持 `original` / `rewrite` / `hyde` / `multi_query` / `rewrite_multi_query` 五种查询路由
 - 支持组合路由 `rewrite_multi_query`：先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果扩展多路子查询
 - 组合路由在复用 `rewritten_query` 与 `multi_queries` 两个字段的同时，用「原问题 → 改写 → 多路子查询 → 合并召回」的流程条呈现执行链
-- 每条 assistant 消息可展开路由快照，查看原始问题、实际检索 Query、改写内容、HyDE 假设答案及多路子查询
-- 路由快照由后端持久化，刷新页面或恢复历史会话后仍可查看；旧消息无快照时自动隐藏
-- 侧栏展示当前查询路由策略、引用匹配度柱状图与来源排行
+- **混合检索调试**：向量语义召回 + 关键词全文召回，按 RRF 融合排序；可展开查看每条引用的来源、两路排名、分数和 RRF 分数
+- **检索范围过滤**：按文档类型和上传日期筛选，条件随 `ChatRequest.filters` 发送给后端
+- 每条 assistant 消息可展开 Agent 轨迹、路由快照和混合检索快照，查看原始问题、改写内容、HyDE 假设答案、多路子查询及排名
+- Agent 轨迹和路由快照由后端持久化，刷新页面或恢复历史会话后仍可查看；旧消息缺少对应字段时自动隐藏
+- 侧栏展示当前 Agent 轮次、查询路由策略、引用匹配度柱状图与来源排行
 - 回答渲染 Markdown；引用按 `ordinal` 显示，点击可打开来源文档
 - 会话 ID 保存在浏览器本地，刷新后可恢复历史消息
 - 支持停止生成、新建对话、Enter 发送 / Shift + Enter 换行
@@ -99,7 +102,7 @@ npm run dev
 | 文档详情 | `GET` | `/api/documents/{id}/chunks/{chunk_id}` | 单个文本块完整内容 |
 | 知识问答 | `POST` | `/api/conversations` | 创建会话（body: `{"title": "..."}`） |
 | 知识问答 | `GET` | `/api/conversations/{id}` | 会话详情与历史消息 |
-| 知识问答 | `POST` | `/api/conversations/{id}/chat` | SSE 流式问答（body: `{"question": "..."}`） |
+| 知识问答 | `POST` | `/api/conversations/{id}/chat` | SSE 流式问答（body: `{"question": "...", "filters": {...}}`） |
 | 系统状态 | `GET` | `/api/health`、`/api/health/db`、`/api/health/cos` | 依赖健康检查 |
 
 ## 同步后端类型

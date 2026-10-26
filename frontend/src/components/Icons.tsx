@@ -258,4 +258,16 @@ export function RouteIcon(props: IconProps) {
   )
 }
 
+export function AgentIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M20.2 12a8.2 8.2 0 0 1-14.5 5.2" />
+      <path d="M3.8 12a8.2 8.2 0 0 1 14.5-5.2" />
+      <path d="M18.3 3.2v3.6h-3.6" />
+      <path d="M5.7 20.8v-3.6h3.6" />
+      <path d="M9.6 9.5h4.8M12 9.5v5.2" />
+    </Icon>
+  )
+}
+
 

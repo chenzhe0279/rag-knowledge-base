@@ -2,6 +2,8 @@ import { fetchEventSource } from '@microsoft/fetch-event-source'
 import { API_BASE_URL } from '../config'
 import { extractApiErrorMessage } from './documents'
 import type {
+  AgentActionValue,
+  AgentStep,
   ApiMessageRead,
   ChatCitation,
   ChatMessage,
@@ -12,6 +14,7 @@ import type {
   QueryRouteValue,
   RetrievalMeta,
 } from '../types/chat'
+import { AGENT_ACTION_VALUES } from '../lib/agentTrace'
 import type { ApiRetrievalFilters } from '../lib/retrievalFilters'
 
 export class ChatApiError extends Error {
@@ -200,6 +203,54 @@ function toQueryRoute(input: unknown): QueryRoute | null {
   }
 }
 
+/**
+ * 后端 agent_steps 是 JSONB / SSE 联合载荷，历史脏数据不能影响聊天主流程。
+ * 逐条解析，丢弃非法 step；全部非法时返回 null。
+ */
+function toAgentStep(input: unknown): AgentStep | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const raw = input as Record<string, unknown>
+  if (
+    typeof raw.round !== 'number' ||
+    !Number.isFinite(raw.round) ||
+    raw.round < 1 ||
+    typeof raw.action !== 'string' ||
+    !AGENT_ACTION_VALUES.includes(raw.action as AgentActionValue) ||
+    typeof raw.route !== 'string' ||
+    !QUERY_ROUTE_VALUES.includes(raw.route as QueryRouteValue) ||
+    typeof raw.query !== 'string'
+  ) {
+    return null
+  }
+
+  return {
+    round: Math.trunc(raw.round),
+    action: raw.action as AgentActionValue,
+    reason: typeof raw.reason === 'string' ? raw.reason : '',
+    route: raw.route as QueryRouteValue,
+    query: raw.query,
+    retrieved_count: toNumberOrNull(raw.retrieved_count),
+    top_score: toNumberOrNull(raw.top_score),
+    sufficient:
+      typeof raw.sufficient === 'boolean' ? raw.sufficient : null,
+  }
+}
+
+function toAgentSteps(input: unknown): AgentStep[] | null {
+  if (!Array.isArray(input) || input.length === 0) {
+    return null
+  }
+
+  const steps = input
+    .map(toAgentStep)
+    .filter((step): step is AgentStep => step !== null)
+
+  return steps.length > 0 ? steps : null
+}
+
 export function toChatMessage(message: ApiMessageRead): ChatMessage {
   return {
     id: message.id,
@@ -209,6 +260,7 @@ export function toChatMessage(message: ApiMessageRead): ChatMessage {
     created_at: message.created_at,
     citations: (message.citations ?? []).map(toCitation),
     queryRoute: toQueryRoute(message.query_route),
+    agentSteps: toAgentSteps(message.agent_steps),
   }
 }
 
@@ -227,7 +279,7 @@ function parseSseData(data: string): Record<string, unknown> {
  * 使用 @microsoft/fetch-event-source 消费后端的 SSE 流。
  *
  * 后端事件协议：
- * message_start -> query_route -> citations -> token... -> message_end
+ * message_start -> query_route -> agent_steps -> citations -> token... -> message_end
  * 任意阶段失败会发送 error 事件。
  */
 export async function streamChat(
@@ -298,6 +350,13 @@ export async function streamChat(
             const queryRoute = toQueryRoute(payload)
             if (queryRoute) {
               handlers.onQueryRoute?.(queryRoute)
+            }
+            break
+          }
+          case 'agent_steps': {
+            const steps = toAgentSteps(payload.steps)
+            if (steps) {
+              handlers.onAgentSteps?.(steps)
             }
             break
           }

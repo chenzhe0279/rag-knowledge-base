@@ -10,6 +10,7 @@ import {
   toChatMessage,
 } from '../api/chat'
 import {
+  AgentIcon,
   ChatIcon,
   PlusIcon,
   RouteIcon,
@@ -17,9 +18,11 @@ import {
   SparkIcon,
   StopIcon,
 } from '../components/Icons'
+import { AgentStepsPanel } from '../components/AgentStepsPanel'
 import { QueryRoutePanel } from '../components/QueryRoutePanel'
 import { RetrievalFilterBar } from '../components/RetrievalFilterBar'
 import { RetrievalMetaPanel } from '../components/RetrievalMetaPanel'
+import { summarizeAgentSteps } from '../lib/agentTrace'
 import { QUERY_ROUTE_META } from '../lib/queryRoute'
 import {
   formatCitationMeta,
@@ -154,6 +157,10 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
     .find((message) => message.role === 'assistant')
   const latestCitations = latestAssistant?.citations ?? []
   const latestQueryRoute = latestAssistant?.queryRoute ?? null
+  const latestAgentSteps = latestAssistant?.agentSteps ?? null
+  const latestAgentSummary = latestAgentSteps
+    ? summarizeAgentSteps(latestAgentSteps)
+    : null
   const latestRouteMeta = latestQueryRoute
     ? QUERY_ROUTE_META[latestQueryRoute.route]
     : null
@@ -237,6 +244,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         created_at: createdAt,
         citations: [],
         queryRoute: null,
+        agentSteps: null,
       },
       {
         id: assistantId,
@@ -246,6 +254,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         created_at: createdAt,
         citations: [],
         queryRoute: null,
+        agentSteps: null,
       },
     ])
     setInput('')
@@ -285,6 +294,15 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
               current.map((message) =>
                 message.id === assistantId
                   ? { ...message, queryRoute }
+                  : message,
+              ),
+            )
+          },
+          onAgentSteps: (agentSteps) => {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === assistantId
+                  ? { ...message, agentSteps }
                   : message,
               ),
             )
@@ -392,21 +410,23 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             <span>提问</span>
           </h1>
           <p className="hero__lead">
-            基于已入库文档进行检索与生成。查询路由会自动选择原查询、改写、HyDE
-            或多路检索策略，再通过向量语义召回与关键词全文召回做混合检索，最后由
-            RRF 融合排序。回答以 SSE 流式返回，并保留完整调试快照。
+            基于已入库文档进行检索与生成。Agent 会先规划检索，观察召回数量与
+            Top 语义相似度，必要时改写查询、切换策略或主动拒答；随后通过向量语义
+            与关键词全文的混合检索、RRF 融合排序，再流式生成回答。完整决策轨迹会
+            随消息保留。
           </p>
         </div>
         <div className="chat-hero__aside">
           <span className="chat-live-pill">
             <span className="chat-live-pill__dot" aria-hidden="true" />
-            SSE · HYBRID RETRIEVAL
+            SSE · AGENTIC RAG
           </span>
           <p>回答来自知识库检索，不脱离文档凭空生成。</p>
           <div
             className="chat-capability-chips"
-            aria-label="查询优化能力"
+            aria-label="Agentic RAG 能力"
           >
+            <span>Agent Loop</span>
             <span>Rewrite</span>
             <span>HyDE</span>
             <span>Multi-Query</span>
@@ -449,6 +469,15 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 <RouteIcon className="icon" />
                 {latestRouteMeta ? latestRouteMeta.label : '等待查询路由'}
               </span>
+              {latestAgentSummary ? (
+                <span
+                  className="chat-agent-meta"
+                  title={`Agent 执行 ${latestAgentSummary.rounds} 轮，${latestAgentSummary.adjustments} 次策略调整，最终判断：${latestAgentSummary.outcomeLabel}`}
+                >
+                  <AgentIcon className="icon" />
+                  Agent · {latestAgentSummary.rounds} 轮
+                </span>
+              ) : null}
             </div>
             <button
               type="button"
@@ -552,7 +581,9 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           </div>
 
           <p className="chat-rail__footnote">
-            `message_start → query_route → citations → token → message_end`
+            `message_start → query_route → agent_steps`
+            <br />
+            `citations → token → message_end`
             <br />
             由 FastAPI SSE 推送
           </p>
@@ -581,7 +612,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 <p className="chat-welcome__eyebrow">START A CONVERSATION</p>
                 <h2>从一份文档开始</h2>
                 <p>
-                  问一个具体问题，系统会自动选择查询路由并检索相关片段，再基于片段生成回答。每个引用都可以打开原文档，路由调试快照会随消息保留。
+                  问一个具体问题，Agent 会先规划检索并在信息不足时改写查询或切换策略，
+                  再基于命中的知识片段生成回答。完整决策轨迹、路由快照和检索排名都会随消息保留。
                 </p>
                 <div className="chat-suggestions">
                   {SUGGESTIONS.map((suggestion) => (
@@ -627,12 +659,14 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                               <i />
                               <i />
                               <i />
-                              {message.queryRoute
-                                ? `${
-                                    QUERY_ROUTE_META[message.queryRoute.route]
-                                      .label
-                                  } · 正在检索与组织回答`
-                                : '正在检索与组织回答'}
+                              {message.agentSteps
+                                ? `Agent ${message.agentSteps.length} 轮完成 · 正在生成回答`
+                                : message.queryRoute
+                                  ? `${
+                                      QUERY_ROUTE_META[message.queryRoute.route]
+                                        .label
+                                    } · 正在检索与组织回答`
+                                  : '正在检索与组织回答'}
                             </span>
                           )
                         ) : (
@@ -642,6 +676,13 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                           <span className="chat-caret" aria-hidden="true" />
                         ) : null}
                       </div>
+
+                      {isAssistant && message.agentSteps ? (
+                        <AgentStepsPanel
+                          steps={message.agentSteps}
+                          live={streaming && isLast}
+                        />
+                      ) : null}
 
                       {isAssistant && message.queryRoute ? (
                         <QueryRoutePanel
