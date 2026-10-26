@@ -137,19 +137,16 @@ class QueryRewriter:
         # 第二步：截取前 n 个元素
         return temp_list[:n]
 
-    # =========================================================================
-    # 核心大脑：分发与执行优化（Optimize）
-    # =========================================================================
-    # 这是整个类对外暴露的主入口，负责编排上述 4 个步骤，并统一组装返回结果。
-    async def optimize(self, question: str, multi_query_count: int) -> QueryRouteResult:
-        """按 route 分发并填充结果。任何一步失败都安全降级到 original。"""
-
-        # 【最后一道防线】：开启全局异常捕获。
-        # 因为大模型 API 随时可能超时、限流或欠费，如果不加 try-except，整个问答接口直接崩溃（500 错误）。
+    # 【核心重构】：原来庞大的 optimize 方法被拆分了。
+    # 新提取出来的 apply_route 方法，只负责“执行”特定路由的改写逻辑，不再负责“判断”用哪个路由。
+    async def apply_route(self, question: str, route: QueryRoute, multi_query_count: int) -> QueryRouteResult:
+        """已知目标 route 时，按 route 执行对应改写链路并填充 QueryRouteResult。
+           与 optimize 的区别：optimize 内部先调 decide_route 判定 route，再调本方法分发；
+           apply_route 跳过判定环节，直接按调用方给定的 route 执行
+           在 switch_route 决策时由 planner 直接指定 route，复用这套分发逻辑补齐字段，
+           避免在 plan_retrieval 节点里再写一遍 if-elif 与降级兜底。
+        """
         try:
-            # 先让大模型充当路由器，决定走哪条路
-            route = await self.decide_route(question)
-
             # ================= 分支 1：Rewrite（改写） =================
             if route == "rewrite":
                 # 去执行改写操作
@@ -236,7 +233,29 @@ class QueryRewriter:
             # ================= 兜底分支 =================
             # 如果路由返回的是 "original"，或者发生了任何意料之外的情况，直接返回原问题
             return QueryRouteResult(route="original", query=question)
+        # 【兜底容错】：如果具体的改写链路（比如调大模型、调分词器）出现异常
+        except Exception:
+            # 记录堆栈日志，并在日志里带上当前的路由策略和问题，方便排查
+            logger.exception(
+                "apply_route 失败，降级到 original: route=%s question=%r",
+                route,
+                question,
+            )
+            # 保证系统高可用：降级为原问题直接检索
+            return QueryRouteResult(route="original", query=question)
 
+    # =========================================================================
+    # 核心大脑：分发与执行优化（Optimize）
+    # =========================================================================
+    # 这是整个类对外暴露的主入口，负责编排上述 4 个步骤，并统一组装返回结果。
+    async def optimize(self, question: str, multi_query_count: int) -> QueryRouteResult:
+        """按 route 分发并填充结果。任何一步失败都安全降级到 original。"""
+
+        # 【最后一道防线】：开启全局异常捕获。
+        # 因为大模型 API 随时可能超时、限流或欠费，如果不加 try-except，整个问答接口直接崩溃（500 错误）。
+        try:
+            # 先让大模型充当路由器，决定走哪条路
+            route = await self.decide_route(question)
         # ================= 异常兜底机制 =================
         except Exception:
             # 如果网络断了、API 限流了，把详细的错误堆栈记录在服务端日志里（方便程序员查 Bug）
@@ -246,6 +265,8 @@ class QueryRewriter:
             # 同时，给前端返回一个安全的、可以继续运行的结果（原问题）。
             # 这就是高可用设计的精髓：“用户可能体验不到优化，但服务绝对不能挂”。
             return QueryRouteResult(route="original", query=question)
+        # 第二步：既然已经知道怎么走了，把问题、路由、数量交给具体执行者去干活
+        return await self.apply_route(question, route, multi_query_count)
 
 
 # 定义内部函数：从大模型返回的复杂内容中提取纯文本字符串
