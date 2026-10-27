@@ -69,6 +69,9 @@ class RetrievedChunk:
     # RRF（倒数排名融合）最终得分：混合检索时，把向量排名和关键词排名融合后算出的最终得分。
     rrf_score: float | None = None
 
+    # reranker query-chunk 成对打分的相关度，越大越相关
+    # qwen3-rerank 输出 relevance_score ∈ [0, 1]
+    rerank_score: float | None = None
 
 # 定义向量检索器类
 class VectorRetriever:
