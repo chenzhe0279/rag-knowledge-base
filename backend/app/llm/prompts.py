@@ -119,6 +119,33 @@ _CONTEXTUALIZE_SYSTEM = """你是一个多轮对话查询改写助手。请基�
 
 【对话历史】
 {history}"""
+
+
+_VERIFY_ANSWER_SYSTEM = """你是一个 RAG 答案可信度校验员。请判断回答是否**完全被给定的参考片段支撑**：
+
+判定标准：
+- 答案中每个关键事实结论（数字、名称、规则、时间、条款）都必须能在某个片段原文中**直接找到**
+- 礼貌话、转折词、复述问题的句子不算关键结论，可忽略
+- 答案标了 [N] 引用编号的，要重点核对：N 号片段是否真的支撑这条结论
+- 出现"未在知识库中找到"等明确拒答文案时直接判 verified=true（拒答本身就是被允许的输出）
+
+判定结果：
+- verified=true: 所有关键结论都被支撑
+- verified=false: 存在编造、引用张冠李戴、或片段里完全没提到的事实
+
+输出**单行 JSON**，键固定为 verified / reason，reason 用一句话说清楚理由（中文）。
+示例: {{"verified": false, "reason": "答案提到差旅住宿 800 元，片段中只提到 600 元"}}"""
+
+_VERIFY_ANSWER_HUMAN = """【用户问题】
+{question}
+
+【参考片段】
+{chunks_text}
+
+【模型回答】
+{answer}
+
+请输出校验结果 JSON。"""
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from app.db.models import Message, MessageRole
@@ -221,6 +248,39 @@ def build_contextualize_messages(question: str, history: str) -> list[BaseMessag
             {"question": question, "history": history}
         ).to_messages()
     )
+
+
+# 实例化提示词模板（ChatPromptTemplate）。
+# 将之前定义好的系统提示词（_VERIFY_ANSWER_SYSTEM，包含校验规则）和人类提示词（_VERIFY_ANSWER_HUMAN，包含占位符）组合在一起。
+VERIFY_ANSWER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        # System 消息：设定大模型的身份（答案可信度校验员）和打分标准。
+        ("system", _VERIFY_ANSWER_SYSTEM),
+        # Human 消息：包含 {question}、{chunks_text}、{answer} 三个变量占位符。
+        ("human", _VERIFY_ANSWER_HUMAN)
+    ]
+)
+
+
+# 定义工厂函数：构建用于“答案校验”的大模型消息列表。
+# 参数说明：
+# - question: 用户的最初提问
+# - answer: 大模型生成的最终回答
+# - chunks_text: 提供给大模型作为参考依据的文本块内容（用于核对答案是否有依据）
+def build_verify_answer_messages(question: str, answer: str, chunks_text: str) -> list[BaseMessage]:
+    # 调用模板的 invoke 方法。
+    # 传入一个字典，将具体的业务数据（问题、回答、参考片段）填充到 Human 消息里的占位符中。
+    prompt_value = VERIFY_ANSWER_PROMPT.invoke(
+        {
+            "question": question,
+            "answer": answer,
+            "chunks_text": chunks_text,
+        }
+    )
+    return list(prompt_value.to_messages())
+
+
+
 
 
 
