@@ -18,7 +18,7 @@ async def route_query(state: RAGState) -> RAGState:
     # get_query_rewriter() 获取的是单例对象。
     # 传入用户的具体问题 state["question"]，以及从配置读取的多路查询生成数量。
     result = await get_query_rewriter().optimize(
-        question=state["question"],
+        question=state["query"],
         multi_query_count=settings.multi_query_count,
     )
 

@@ -39,7 +39,7 @@ async def plan_retrieval(state: RAGState) -> RAGState:
     # 后续轮：由 LLM planner 决定如何重试
     # 调用大模型（Agent Planner），让它基于历史失败记录，思考接下来该采取什么动作（action）
     decision = await get_agent_planner().plan(
-        question=state["question"],  # 原始问题
+        question=state["query"],  # 原始问题
         current_route=current_route,  # 这一轮用的检索策略
         current_query=current_query,  # 这一轮用的查询词
         previous_steps=steps,  # 历史检索记录
@@ -71,7 +71,7 @@ async def plan_retrieval(state: RAGState) -> RAGState:
         # 真正切换：调 QueryRewriter 补齐目标路由对应字段，避免只换标签不换行为
         rewriter = get_query_rewriter()
         result = await rewriter.apply_route(
-            question=state["question"],
+            question=state["query"],
             route=decision.new_route,
             multi_query_count=settings.multi_query_count,
         )

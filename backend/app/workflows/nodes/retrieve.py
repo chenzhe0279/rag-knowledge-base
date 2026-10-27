@@ -4,7 +4,7 @@ from app.retrieval.vector_retriever import RetrievedChunk
 from app.workflows.rag_state import RAGState
 
 
-# 定义异步节点函数：执行向量检索并根据检索质量决定是否拒答
+# 定义检索节点
 async def retrieve(state: RAGState) -> RAGState:
     # 0. 获取过滤条件
     filters = state.get("filters")

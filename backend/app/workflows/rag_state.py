@@ -68,9 +68,13 @@ class RAGState(TypedDict, total=False):
 
     # 3. 上下文充足性判定标记（循环退出条件）。
     # 由 observe_context 节点产出。它会基于检索结果来评估：“当前找到的内容，够不够回答用户的问题？”
-    # - 如果为 True：说明信息已经足够，工作流图（Graph）会直接走向 END 节点，跳出循环，开始生成最终回答。
+    # - 如果为 True：说明信息已经足够，工作流图（Graph）会直接走向 rerank 节点，跳出循环，开始生成最终回答。
     # - 如果为 False：说明信息不足，工作流会走回 plan_retrieval 节点，让 LLM 重新改写查询词，进行下一轮检索。
     context_sufficient: bool
+
+    # rerank 后基于 Top1 score 的拒答闸门
+    # False 时图走向 refuse 节点；True 时图走向 END
+    context_is_enough: bool
 
     # ==================== generate 节点产出 ====================
 
