@@ -1,6 +1,5 @@
 from app.core.config import settings
 from app.llm.agent_planner import get_agent_planner
-from app.llm.prompts import REFUSAL_ANSWER
 from app.llm.query_rewriter import get_query_rewriter
 from app.workflows.rag_state import QueryRoute, RAGState
 
@@ -14,7 +13,7 @@ async def plan_retrieval(state: RAGState) -> RAGState:
     steps = list(state.get("agent_steps", []))
 
     # 2. 提取当前的路由策略。如果之前没设置，默认为 "original"（原问题检索）。
-    current_route: QueryRoute = state.get("route", "original")
+    current_route: QueryRoute = state.get("route", "original") # type: ignore[assignment]
 
     # 3. 提取当前的查询词。
     # 优先使用 state 里的 "query"（可能是被改写过的），如果为空，则回退使用原始问题 "question"。
@@ -61,7 +60,7 @@ async def plan_retrieval(state: RAGState) -> RAGState:
         new_route = "original"  # 强制把策略改回 original，意味着只用这一个新的 query 去搜
 
         update["query"] = new_query
-        update["route"] = new_route
+        update["route"] = new_route # type: ignore[assignment]
         # 下面这三个清空极其重要：清掉历史残留的改写结果、HyDE 文本和多路查询列表
         update["rewritten_query"] = None
         update["hyde_answer"] = None
@@ -70,7 +69,6 @@ async def plan_retrieval(state: RAGState) -> RAGState:
     # ================= 分支 2：大模型决定“切换检索路由” =================
     elif decision.action == "switch_route" and decision.new_route:
         # 真正切换：调 QueryRewriter 补齐目标路由对应字段，避免只换标签不换行为
-        # （这里完美印证了上一条我们讨论的 apply_route 重构的意义：大模型钦定了 new_route，我们直接执行！）
         rewriter = get_query_rewriter()
         result = await rewriter.apply_route(
             question=state["question"],
@@ -112,18 +110,6 @@ async def plan_retrieval(state: RAGState) -> RAGState:
 
     # 将更新后的完整步骤历史，存入待返回的状态更新字典中
     update["agent_steps"] = steps
-
-    # 2. 【特殊终止条件】：如果大模型判定应该直接拒答（多轮检索都找不到相关资料）
-    # refuse 时直接终止图：retrieve 不再跑，answer 也要在这里兜底，
-    # 否则 service 看到 refused=True 但 state["answer"] 缺失会发送空 token
-    if decision.action == "refuse":
-        # 设置拒答标记，后续工作流看到这个标记，就不会再去调用检索节点和大模型生成节点了
-        update["refused"] = True
-
-        # 【极其关键的兜底】：在这里直接把预设的拒答文案塞进 answer 字段。
-        # 为什么？因为如果不在这里赋值，后续的流式输出服务（SSE）发现 answer 是空的，
-        # 可能会向前端发送一个空的 token 或导致程序崩溃。这叫“未雨绸缪”。
-        update["answer"] = REFUSAL_ANSWER
 
     # 3. 返回局部更新字典，LangGraph 会自动将其合并到全局的 RAGState 中
     return update
