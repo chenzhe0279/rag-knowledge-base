@@ -104,6 +104,21 @@ _AGENT_PLAN_HUMAN = """
 
 请输出下一步决策的 JSON。"""
 
+
+# 定义系统提示词（System Prompt）。
+# 这个节点的核心任务是“指代消解”。在多轮对话中，用户经常说“它怎么用”，直接拿去检索是搜不到东西的。
+# 这个 Prompt 会让大模型结合历史对话，消解用户问题中的指代关系，补全省略成分，使问题独立完整、可单独检索。
+_CONTEXTUALIZE_SYSTEM = """你是一个多轮对话查询改写助手。请基于对话历史把用户当前问题改写成
+**独立完整、可单独检索**的问句：
+
+- 消解指代："它"、"这个"、"上面提到的..."、"刚才那个..."等
+- 补全省略：用户在追问场景里经常省略主语或宾语，需要从历史里把缺失成分补全
+- 不要回答问题，不要扩展含义，不要改变用户的真实意图
+- 不要加任何引号、编号、解释，只输出单行改写后的问句
+- 如果当前问题已经独立完整，直接原样输出
+
+【对话历史】
+{history}"""
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from app.db.models import Message, MessageRole
@@ -183,6 +198,31 @@ AGENT_PLAN_PROMPT = ChatPromptTemplate.from_messages(
         ("human", _AGENT_PLAN_HUMAN)
     ]
 )
+
+
+# 定义人类消息模板。
+# 这里只放用户当前的最新问题。历史记录被放到了 System Prompt 中，这样能最大化利用上下文窗口，并让大模型更清楚自己的任务边界。
+_CONTEXTUALIZE_HUMAN = "{question}"
+
+# 将 System 和 Human 组合成一个 ChatPromptTemplate 实例。
+# 后续调用 invoke 时，系统会自动把 {history} 和 {question} 替换成真实数据。
+CONTEXTUALIZE_PROMPT = ChatPromptTemplate.from_messages(
+    [("system", _CONTEXTUALIZE_SYSTEM), ("human", _CONTEXTUALIZE_HUMAN)]
+)
+
+
+# 定义工厂函数：构建用于“查询重写”的大模型消息列表。
+# 参数说明：
+# - question: 用户当前这一轮提出的问题（例如："那它怎么安装？"）
+# - history: 之前几轮对话拼接成的格式化字符串
+def build_contextualize_messages(question: str, history: str) -> list[BaseMessage]:
+    return list(
+        CONTEXTUALIZE_PROMPT.invoke(
+            {"question": question, "history": history}
+        ).to_messages()
+    )
+
+
 
 # 定义函数：将检索到的 Chunk 列表格式化为一个长字符串，供 LLM 作为参考上下文
 def format_context(chunks: list[RetrievedChunk]) -> str:
