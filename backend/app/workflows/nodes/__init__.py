@@ -5,11 +5,17 @@ from app.workflows.nodes.retrieve import retrieve
 from app.workflows.nodes.route_query import route_query
 from app.workflows.nodes.plan_retrieval import plan_retrieval
 from app.workflows.nodes.observe_context import observe_context
+from app.workflows.nodes.rerank import rerank
+from app.workflows.nodes.refuse import refuse
+from app.workflows.nodes.judge_context import judge_context
+
 
 # 定义 __all__ 变量
 # 作用 1：严格控制对外暴露的公共接口。当其他模块使用 `from app.workflows.nodes import *` 时，只会导入这个列表里列出的名字。
 # 作用 2：作为模块的“说明书”，让开发者一眼就能看出这个包（nodes）里到底提供了哪些核心的节点函数。
 __all__ = [
+    # 判断对话上下文的节点函数
+    "judge_context",
     # 加载历史对话上下文的节点函数
     "load_context",
     # 规范化/改写用户查询的节点函数
@@ -18,6 +24,10 @@ __all__ = [
     "observe_context",
     # 计划检索的节点函数
     "plan_retrieval",
+    # 拒绝回答的节点函数
+    "refuse",
+    # 重新排名检索结果的节点函数
+    "rerank",
     # 执行向量检索的节点函数
     "retrieve",
     # 执行查询路由的节点函数
