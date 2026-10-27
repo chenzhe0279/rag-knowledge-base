@@ -2,12 +2,13 @@ from dataclasses import dataclass
 from typing import get_args
 
 from app.core.logger import get_logger
+from app.db.models import Message, MessageRole
 from app.llm.models import get_chat_model
 from app.llm.prompts import (
     build_hyde_messages,
     build_multi_query_messages,
     build_rewrite_messages,
-    build_route_messages,
+    build_route_messages, build_contextualize_messages,
 )
 from app.workflows.rag_state import QueryRoute
 
@@ -269,6 +270,53 @@ class QueryRewriter:
         return await self.apply_route(question, route, multi_query_count)
 
 
+    # 定义异步方法：多轮对话上下文查询重写（Contextualize）。
+    # 接收当前问题和历史消息列表，返回一个独立、完整、可被检索的查询词（字符串）。
+    async def contextualize(self, question: str, history: list[Message]) -> str:
+        """基于多轮历史把当前问题改写成独立完整问句。
+
+        消解"它/这个/上面提到的"等指代、补省略，让后续 route_query / retrieve
+        看到的 query 已经独立可检索。空历史直接回原问题；任何异常 / 改写为空 -> 降级回原问题。
+        """
+
+        # 1. 将历史消息对象列表（Message）格式化为纯文本字符串，方便塞入 Prompt。
+        history_text = _format_history_text(history)
+
+        # 2. 防御性判断：如果没有历史记录（比如这是用户的第一句话），
+        # 或者历史记录为空字符串，那根本不存在“指代消解”的问题，直接原样返回当前问题，省去一次大模型调用。
+        if not history_text:
+            return question
+
+        # 3. 开启异常捕获，确保任何网络或模型错误都不会阻断主问答流程。
+        try:
+            # 4. 组装提示词消息列表（包含 System 角色和 Human 角色）。
+            messages = build_contextualize_messages(
+                question=question, history=history_text
+            )
+
+            # 5. 异步调用大模型进行推理。
+            response = await get_chat_model().ainvoke(messages)
+
+            # 6. 提取大模型返回的内容，清理首尾空白字符。
+            rewritten = _extract_text(response.content).strip()
+
+            # 7. 返回改写后的结果。
+            # 【极其巧妙的兜底】：使用 `rewritten or question`。
+            # 如果大模型抽风返回了空字符串 ""（在 Python 中布尔值为 False），
+            # 就会自动降级返回原始的 question，绝对不会让下游拿到空查询词去搜库。
+            return rewritten or question
+
+        # 8. 捕获任何可能的异常（如 API 超时、限流、解析报错）。
+        except Exception:
+            # 记录详细的异常堆栈日志，方便排查。
+            logger.exception(
+                "contextualize 调用失败，降级回原问题: question=%r", question
+            )
+            # 9. 发生异常时的最终降级：直接返回用户的原始问题。
+            # 这样后续流程依然可以正常工作（虽然可能搜得没那么准，但系统不会崩）。
+            return question
+
+
 # 定义内部函数：从大模型返回的复杂内容中提取纯文本字符串
 # 参数类型注解：content 可能是一个字符串，也可能是一个列表（列表元素可能是字符串或字典）
 def _extract_text(content: str | list[str | dict]) -> str:
@@ -285,6 +333,40 @@ def _extract_text(content: str | list[str | dict]) -> str:
     # 最后使用空字符串 "" 将所有提取出来的文本片段拼接成一个完整的纯文本
     return "".join(part.get("text", "") for part in content if isinstance(part, dict))
 
+
+# 定义全局字典，用于将枚举类型的角色（MessageRole）映射为中文标签。
+_ROLE_LABEL: dict[MessageRole, str] = {
+    MessageRole.USER: "用户",
+    MessageRole.ASSISTANT: "助手",
+    MessageRole.SYSTEM: "系统",
+}
+
+
+# 定义辅助函数：将数据库里的一堆消息对象，格式化为大模型能看懂的纯文本历史记录。
+def _format_history_text(history: list[Message]) -> str:
+    """把历史 Message 压成给 contextualize prompt 看的纯文本。
+
+    只取 user / assistant, 过滤 system; 空内容跳过, 避免把空消息塞进 prompt 浪费 token。
+    """
+    # 创建一个列表，用来收集每一行格式化好的文本
+    lines: list[str] = []
+
+    # 遍历历史消息列表
+    for msg in history:
+        # 从字典中安全获取角色标签。如果遇到了未知的角色类型，会返回 None
+        role_label = _ROLE_LABEL.get(msg.role)
+
+        # 1. 如果没拿到角色标签（未知角色）
+        # 2. 或者消息内容去掉首尾空格后是空的
+        # 满足任一条件，直接跳过这条消息，绝不塞进 Prompt。
+        if not role_label or not msg.content.strip():
+            continue
+
+        # 将角色和清洗后的文本内容拼接成类似 "用户: 你好" 的格式，并加入列表
+        lines.append(f"{role_label}: {msg.content.strip()}")
+
+    # 使用换行符把所有行拼接成一个完整的历史字符串，返回给调用方
+    return "\n".join(lines)
 
 _rewriter: QueryRewriter | None = None
 
