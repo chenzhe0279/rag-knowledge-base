@@ -262,12 +262,19 @@ class ChatService:
 
     # 定义内部异步方法：持久化用户消息
     async def _persist_user_message(self, state: RAGState, session: AsyncSession) -> None:
-        """流式开始前先把 user 消息落库并 commit。
+        """流式开始前先把 user 消息落库并 commit。首次提问时顺手把会话标题改成用户问题前 30 个字。
 
         必须在 load_context 之后调用：load_context 读到的"历史消息"不应包含本轮提问。
+        标题更新放在同一事物里，避免新建会话后侧栏一直显示【新对话】
         """
         # 实例化对话仓储类，复用传入的独立数据库会话
         repo = ConversationRepository(session)
+
+        #首次提问时（会话还没有任何消息）-> 把默认标题改成本次问题
+        if await repo.count_messages(state["conversation_id"]) == 0:
+            await repo.update_title_if_default(
+                state["conversation_id"], title=state["question"]
+            )
 
         # 调用静态工厂方法，快速构建一个用户角色的 Message 实体对象。
         # 从 state 中取出当前会话 ID 和用户的问题。
@@ -373,6 +380,32 @@ class ChatService:
 
         # 将数据库生成的 AI 消息主键 ID 回写到 state 中，供外层的 message_end 事件使用
         state["assistant_message_id"] = assistant_msg.id
+
+    async def list_conversations(self, page: int, page_size: int) -> tuple[list[tuple[Conversation, int]], int]:
+        """获取会话分页列表。"""
+        # 实例化底层的数据访问对象（Repository），将当前的数据库 session 传进去
+        repo = ConversationRepository(self.session)
+        # 直接调用 Repository 中的 list_page 方法，处理分页逻辑并返回结果
+        # 这里的逻辑（LEFT JOIN 等）在你之前提问的 list_page 函数中
+        return await repo.list_page(page=page, page_size=page_size)
+
+
+    async def delete_conversation(self, conversation_id: UUID) -> None:
+        """删除指定会话。"""
+        # 同样，实例化 Repository
+        repo = ConversationRepository(self.session)
+        # 尝试执行删除操作，返回一个布尔值表示是否真的删除了数据
+        deleted = await repo.delete(conversation_id)
+
+        # 如果 deleted 为 False，说明数据库里没找到这个会话
+        if not deleted:
+            # 抛出业务异常，通常会在 Web 框架（如 FastAPI）的路由层被捕获，并返回 404 状态码
+            raise NotFoundError("会话不存在")
+
+        # 如果删除成功，提交数据库事务（真正写入数据库）
+        await self.session.commit()
+
+
 
 # 定义内部函数：将检索到的文本块对象序列化为字典格式，用于通过 SSE 推送给前端
 def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:

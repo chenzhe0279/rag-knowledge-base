@@ -14,6 +14,11 @@ from app.api.schemas.chat import (
     MessageRead,
 )
 from app.services.chat_service import ChatService
+from fastapi import Query, Response
+from app.api.schemas.chat import (
+    ConversationListItem,
+    ConversationPage,
+)
 
 # 创建聊天模块的路由实例。
 # prefix="/conversations" 表示该模块下所有接口路径都会带上 /conversations 前缀。
@@ -81,3 +86,47 @@ async def stream_chat(conversation_id: UUID, payload: ChatRequest, session: DbSe
             # 事件类型（如 "token", "message_end" 等），前端根据这个字段决定如何处理数据
             event=sse_event["event"],
         )
+
+
+# 获取会话列表（分页）
+@router.get("",  response_model=ConversationPage,  operation_id="listConversations",  summary="按更新时间倒序分页列出所有会话",)
+async def list_conversations(session: DbSession, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),) -> ConversationPage:
+    """获取当前用户的所有会话记录（侧边栏列表）。"""
+    # 1. 实例化服务层对象，将数据库 session 传入
+    service = ChatService(session)
+
+    # 2. 调用服务层的方法，获取当前页的会话及消息数，以及总记录数
+    # items 的数据结构通常是 list[tuple[Conversation, int]]
+    items, total = await service.list_conversations(page=page, page_size=page_size)
+
+    # 3. 组装并返回分页响应模型
+    return ConversationPage(
+        # 使用列表推导式，将数据库模型(Conversation)转换为 Pydantic 响应模型(ConversationListItem)
+        items=[
+            ConversationListItem(
+                id=conv.id,
+                title=conv.title,
+                updated_at=conv.updated_at,
+                message_count=count,  # 在这里将统计出来的消息数量塞入模型
+            )
+            for conv, count in items  # 解包 service 返回的元组列表
+        ],
+        total=total,  # 总记录数
+        page=page,  # 当前页码
+        page_size=page_size,  # 每页条数
+    )
+
+
+# 删除指定会话
+@router.delete("/{conversation_id}",  status_code=204, operation_id="deleteConversation",)
+async def delete_conversation(conversation_id: UUID,  session: DbSession, ) -> Response:
+    """删除指定的会话（硬删除）。"""
+    # 1. 实例化服务层对象
+    service = ChatService(session)
+
+    # 2. 调用服务层删除方法。
+    # 注意：底层如果找不到该会话，会抛出 NotFoundError，FastAPI 会自动将其转化为 404 响应。
+    await service.delete_conversation(conversation_id)
+
+    # 3. 成功删除后，返回空的 204 响应
+    return Response(status_code=204)

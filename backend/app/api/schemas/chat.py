@@ -2,7 +2,6 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from app.retrieval.filters import RetrievalFilter
 
 # 定义消息角色的字面量类型，限制只能传入这三种系统预设的角色
@@ -113,6 +112,9 @@ class RetrievalMeta(BaseModel):
     # 融合得分（RRF）。数值很小（如 0.016），且只能在当前这次检索的结果中互相比较大小。
     rrf_score: float | None = None
 
+    # 重排序得分。
+    rerank_score: float | None = None
+
 
 
 # 读取引用信息的响应模型（用于展示 AI 回答引用的出处）
@@ -174,6 +176,18 @@ def _parse_retrieval_meta(raw: dict | None) -> RetrievalMeta | None:
     except Exception:
         return None
 
+class VerifyResultRead(BaseModel):
+    """answer_verifier 校验结果，落库到 messages.extra_metadata.verify_result。
+
+    - verified=True: 答案被引用片段支撑；reason 通常为空
+    - verified=False: 触发拒答替换（service 层覆盖 answer/refused），reason 写入失败原因
+    """
+
+    # 校验是否通过（True 表示通过，False 表示未通过）
+    verified: bool
+    # 校验的原因/解释（可选，默认值为 None）
+    reason: str | None = None
+
 
 # 读取消息信息的响应模型
 class MessageRead(BaseModel):
@@ -191,6 +205,8 @@ class MessageRead(BaseModel):
     query_route: QueryRouteRead | None = None
     # Agentic RAG 决策轨迹；user / 旧消息 / 关闭 agent loop 时为 None
     agent_steps: list[AgentStep] | None = None
+    # 答案校验结果；user / 旧消息 / 关闭校验时为 None
+    verify_result: VerifyResultRead | None = None
 
     # 定义类方法：将数据库的 Message ORM 对象转换为当前的 Pydantic 响应模型
     @classmethod
@@ -223,6 +239,15 @@ class MessageRead(BaseModel):
             # 如果是用户消息：没有轨迹，给 None
             agent_steps = None
 
+        # ---------- 3. 处理 verify_result 字段 ----------
+        # 只有 assistant (AI) 发送的消息才可能存在“答案校验结果”
+        if is_assistant:
+            # 从消息的附加元数据(extra_metadata)中解析出 verify_result (校验结果对象)
+            verify_result = _parse_verify_result(message.extra_metadata)
+        else:
+            # 如果是用户(user)发送的消息，则不存在校验结果，直接置为 None
+            verify_result = None
+
 
         # 最后，把所有组装好的数据返回给 Pydantic 模型
         return cls(
@@ -232,9 +257,31 @@ class MessageRead(BaseModel):
             created_at=message.created_at,
             citations=citations,  # 传入上面计算好的引用列表
             query_route=query_route,# 传入上面计算好的路由信息
-            agent_steps=agent_steps
+            agent_steps=agent_steps,
+            verify_result=verify_result,
         )
 
+
+def _parse_verify_result(metadata: dict | None) -> VerifyResultRead | None:
+    """从 messages.extra_metadata 中提取 verify_result 字段。第 8 章前的历史消息没有。"""
+    # 1. 如果传入的 metadata 为空（None 或空字典），直接返回 None
+    if not metadata:
+        return None
+
+    # 2. 尝试从 metadata 字典中获取 "verify_result" 对应的值
+    raw = metadata.get("verify_result")
+
+    # 3. 校验类型：如果取出的 raw 不是字典（比如是字符串、数字或 None），说明数据格式不对，返回 None
+    if not isinstance(raw, dict):
+        return None
+
+    try:
+        # 4. 使用 Pydantic 的 model_validate 将字典转换为 VerifyResultRead 模型实例
+        # 如果字典内的字段类型不匹配（例如 verified 不是 bool），这里会抛出 ValidationError
+        return VerifyResultRead.model_validate(raw)
+    except Exception:
+        # 5. 捕获所有校验异常，做最安全的降级处理：直接返回 None，防止整个接口因历史脏数据而崩溃
+        return None
 
 # 定义内部辅助函数：用于从 JSONB 元数据中解析出查询路由信息
 # 参数 metadata 可能是字典，也可能是 None（老数据或者没有额外元数据时）
@@ -313,6 +360,26 @@ class RetrievalFilters(BaseModel):
             created_to=self.created_to,
             document_ids=tuple(self.document_ids),
         )
+
+
+class ConversationListItem(BaseModel):
+    """会话列表元素：侧栏渲染用，比 ConversationRead 多带 message_count。"""
+    id: UUID
+    title: str
+    # 会话最后更新时间
+    updated_at: datetime
+    # 该会话包含的消息总数（用于侧边栏展示）
+    message_count: int
+
+
+class ConversationPage(BaseModel):
+    """会话列表分页响应。统一 page/page_size 风格，与第 3 章文档列表一致。"""
+    # 当前页的会话列表数据
+    items: list[ConversationListItem]
+    total: int
+    page: int
+    page_size: int
+
 
 
 # 发起聊天提问的请求模型
