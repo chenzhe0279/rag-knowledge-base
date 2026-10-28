@@ -4,6 +4,21 @@ import type { components } from './schema'
 export type ConversationRead = components['schemas']['ConversationRead']
 export type ConversationDetail = components['schemas']['ConversationDetail']
 
+/** 会话分页列表；新接口在当前 OpenAPI 生成文件里可能尚未同步。 */
+export interface ConversationListItem {
+  id: string
+  title: string
+  updated_at: string
+  message_count: number
+}
+
+export interface ConversationPage {
+  items: ConversationListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 /**
  * 后端 OpenAPI 可能滞后，或缺少组合路由；前端保留 rewrite_multi_query 兼容，
  * 这样 UI、SSE 解析与历史消息都能正常处理。
@@ -39,10 +54,21 @@ export interface AgentStep {
   sufficient?: boolean | null
 }
 
+/** 答案可信度校验结果；replacement_answer 只在 SSE 校验失败事件中出现。 */
+export interface VerifyResult {
+  verified: boolean
+  reason?: string | null
+  replacement_answer?: string | null
+}
+
 type ApiMessageReadBase = components['schemas']['MessageRead']
-/** 历史接口已返回 agent_steps，OpenAPI 未重新生成前先用可选字段承接。 */
-export type ApiMessageRead = Omit<ApiMessageReadBase, 'agent_steps'> & {
+/** 历史接口已返回 agent_steps / verify_result，OpenAPI 未重新生成前先承接原始数据。 */
+export type ApiMessageRead = Omit<
+  ApiMessageReadBase,
+  'agent_steps' | 'verify_result'
+> & {
   agent_steps?: unknown
+  verify_result?: unknown
 }
 
 /**
@@ -57,6 +83,7 @@ export interface RetrievalMeta {
   keyword_rank?: number | null
   keyword_score?: number | null
   rrf_score?: number | null
+  rerank_score?: number | null
 }
 
 /**
@@ -92,6 +119,8 @@ export interface ChatMessage {
   queryRoute: QueryRoute | null
   /** Agentic RAG 决策轨迹。旧消息、user 消息或关闭 Agent 循环时为 null。 */
   agentSteps: AgentStep[] | null
+  /** 答案可信度校验结果。旧消息、user 消息或关闭校验时为 null。 */
+  verifyResult: VerifyResult | null
 }
 
 export interface ChatStreamHandlers {
@@ -100,6 +129,8 @@ export interface ChatStreamHandlers {
   onQueryRoute?: (route: QueryRoute) => void
   /** agent_steps 事件：Agentic RAG 多轮决策与观察轨迹。 */
   onAgentSteps?: (steps: AgentStep[]) => void
+  /** verify_result 事件：答案可信度校验结果，失败时可能带替换答案。 */
+  onVerifyResult?: (result: VerifyResult) => void
   onCitations?: (citations: ChatCitation[]) => void
   onToken?: (delta: string) => void
   onMessageEnd?: (payload: {

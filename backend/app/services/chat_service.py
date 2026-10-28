@@ -178,8 +178,8 @@ class ChatService:
 
                 # 4. 生成：拒答直接走拒答文案；否则逐 token 流式
                 # 检查 state 中的 refused 标记，如果为 True 说明检索质量太差，触发了拒答机制
+                verify_result: VerifyResult | None = None
                 if state.get("refused"):
-                    verify_result: VerifyResult | None = None
                     # 如果是拒答，直接把 state 里预存好的拒答文案（REFUSAL_ANSWER）作为 token 推给前端
                     yield {
                         "event": "token",
@@ -206,15 +206,13 @@ class ChatService:
                             # 从 state 中获取 retrieved_chunks，如果没有则返回空列表
                             chunks=list(state.get("retrieved_chunks", [])),
                         )
-
+                        replacement = (
+                            REFUSAL_ANSWER if not verify_result.verified else None
+                        )
                         # 如果校验失败（verified=False），则将替换文案设为预定义的拒答文案；如果校验通过则为 None
                         if not verify_result.verified:
-                            replacement = REFUSAL_ANSWER
                             state["answer"] = REFUSAL_ANSWER
                             state["refused"] = True
-                        else:
-                            replacement = None
-
                         # 向前端 yield（发送）一个 SSE 事件，告知前端校验结果
                         yield {
                             "event": "verify_result",
@@ -225,11 +223,11 @@ class ChatService:
                             ),
                         }
 
-                    # 7. assistant 消息 + citations 同事务落库（保证两者原子）
-                    # 无论校验是否通过，都需要将最终的 assistant 消息（可能是替换后的拒答文案）持久化到数据库
-                    await self._persist_assistant_message(
-                        state, session, verify_result=verify_result
-                    )
+                # 7. assistant 消息 + citations 同事务落库（保证两者原子）
+                # 无论校验是否通过，都需要将最终的 assistant 消息（可能是替换后的拒答文案）持久化到数据库
+                await self._persist_assistant_message(
+                    state, session, verify_result=verify_result
+                )
 
                 # 发送最后一个 SSE 事件：通知前端对话生成已完全结束，并回传助手消息的 ID 和是否拒答的状态
                 yield {

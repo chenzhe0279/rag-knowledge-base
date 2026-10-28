@@ -9,10 +9,12 @@ import type {
   ChatMessage,
   ChatStreamHandlers,
   ConversationDetail,
+  ConversationPage,
   ConversationRead,
   QueryRoute,
   QueryRouteValue,
   RetrievalMeta,
+  VerifyResult,
 } from '../types/chat'
 import { AGENT_ACTION_VALUES } from '../lib/agentTrace'
 import type { ApiRetrievalFilters } from '../lib/retrievalFilters'
@@ -117,6 +119,71 @@ export async function getConversation(
   return payload as ConversationDetail
 }
 
+/** 会话列表：侧栏展示最近会话。 */
+export async function listConversations(
+  page = 1,
+  pageSize = 20,
+): Promise<ConversationPage> {
+  let response: Response
+
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/api/conversations?page=${page}&page_size=${pageSize}`,
+      { headers: { Accept: 'application/json' } },
+    )
+  } catch {
+    throw new ChatApiError('无法连接后端服务，请确认服务已启动')
+  }
+
+  const payload = await parseJsonResponse(response)
+
+  if (!response.ok) {
+    throw new ChatApiError(
+      extractApiErrorMessage(payload, fallbackMessage(response.status)),
+      response.status,
+    )
+  }
+
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    !Array.isArray((payload as ConversationPage).items)
+  ) {
+    throw new ChatApiError('会话列表接口返回的数据结构不符合预期')
+  }
+
+  return payload as ConversationPage
+}
+
+/** 删除会话；204 无响应体。 */
+export async function deleteConversation(
+  conversationId: string,
+): Promise<void> {
+  let response: Response
+
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`,
+      {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+      },
+    )
+  } catch {
+    throw new ChatApiError('无法连接后端服务，请确认服务已启动')
+  }
+
+  if (response.ok) {
+    return
+  }
+
+  const payload = await parseJsonResponse(response)
+  throw new ChatApiError(
+    extractApiErrorMessage(payload, fallbackMessage(response.status)),
+    response.status,
+  )
+}
+
 function toNumberOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -140,6 +207,7 @@ function toRetrievalMeta(input: unknown): RetrievalMeta | null {
     keyword_rank: toNumberOrNull(raw.keyword_rank),
     keyword_score: toNumberOrNull(raw.keyword_score),
     rrf_score: toNumberOrNull(raw.rrf_score),
+    rerank_score: toNumberOrNull(raw.rerank_score),
   }
 }
 
@@ -251,6 +319,27 @@ function toAgentSteps(input: unknown): AgentStep[] | null {
   return steps.length > 0 ? steps : null
 }
 
+/** 答案校验结果：历史接口与 SSE 共用；replacement_answer 仅 SSE 失败事件携带。 */
+function toVerifyResult(input: unknown): VerifyResult | null {
+  if (!input || typeof input !== 'object') {
+    return null
+  }
+
+  const raw = input as Record<string, unknown>
+  if (typeof raw.verified !== 'boolean') {
+    return null
+  }
+
+  return {
+    verified: raw.verified,
+    reason: typeof raw.reason === 'string' ? raw.reason : null,
+    replacement_answer:
+      typeof raw.replacement_answer === 'string'
+        ? raw.replacement_answer
+        : null,
+  }
+}
+
 export function toChatMessage(message: ApiMessageRead): ChatMessage {
   return {
     id: message.id,
@@ -261,6 +350,7 @@ export function toChatMessage(message: ApiMessageRead): ChatMessage {
     citations: (message.citations ?? []).map(toCitation),
     queryRoute: toQueryRoute(message.query_route),
     agentSteps: toAgentSteps(message.agent_steps),
+    verifyResult: toVerifyResult(message.verify_result),
   }
 }
 
@@ -279,7 +369,8 @@ function parseSseData(data: string): Record<string, unknown> {
  * 使用 @microsoft/fetch-event-source 消费后端的 SSE 流。
  *
  * 后端事件协议：
- * message_start -> query_route -> agent_steps -> citations -> token... -> message_end
+ * message_start -> query_route -> agent_steps -> citations -> token...
+ * -> verify_result -> message_end
  * 任意阶段失败会发送 error 事件。
  */
 export async function streamChat(
@@ -372,6 +463,13 @@ export async function streamChat(
               handlers.onToken?.(payload.delta)
             }
             break
+          case 'verify_result': {
+            const result = toVerifyResult(payload)
+            if (result) {
+              handlers.onVerifyResult?.(result)
+            }
+            break
+          }
           case 'message_end':
             handlers.onMessageEnd?.({
               message_id:

@@ -65,7 +65,8 @@ export function AgentStepsPanel({
         <div className="chat-route-debug__intro">
           <p>
             Agent 逐轮观察召回数量与 Top 语义相似度，决定继续、改写查询、
-            切换策略或提前拒答；达到充足或轮次上限后进入答案生成。
+            切换策略或提前拒答；循环收敛后统一进入 Rerank 精排与最终裁判，
+            再由答案校验决定是否输出。
           </p>
           <span className="chat-route-debug__state">
             {live ? '正在生成回答' : '已随消息持久化'}
@@ -89,7 +90,7 @@ export function AgentStepsPanel({
             className={`agent-trace__stat agent-trace__stat--outcome is-${summary.outcome}`}
           >
             <strong>{summary.outcomeLabel}</strong>
-            <span>最终判断</span>
+            <span>循环观察</span>
           </div>
         </div>
 
@@ -171,7 +172,7 @@ export function AgentStepsPanel({
         <div className="chat-route-debug__footer">
           <span>
             <i aria-hidden="true" />
-            plan_retrieval → retrieve → observe_context
+            plan → retrieve → observe → rerank → judge_context
           </span>
           <code>{summary.rounds} rounds</code>
         </div>

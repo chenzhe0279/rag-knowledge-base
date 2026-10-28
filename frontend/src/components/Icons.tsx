@@ -270,4 +270,13 @@ export function AgentIcon(props: IconProps) {
   )
 }
 
+export function ShieldCheckIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 3 5 6v5c0 4.6 2.9 8.6 7 10 4.1-1.4 7-5.4 7-10V6l-7-3Z" />
+      <path d="m9 12 2 2 4-4" />
+    </Icon>
+  )
+}
+
 

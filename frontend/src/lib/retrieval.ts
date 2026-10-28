@@ -48,6 +48,25 @@ export function formatRetrievalRank(value: number | null | undefined): string {
   return typeof value === 'number' ? `#${value}` : '—'
 }
 
+/** 优先展示精排分；没有 rerank 时退回向量相似度。 */
+export function getPreferredRetrievalScore(
+  meta?: RetrievalMeta | null,
+): number | null {
+  if (typeof meta?.rerank_score === 'number') {
+    return meta.rerank_score
+  }
+  if (typeof meta?.vector_score === 'number') {
+    return meta.vector_score
+  }
+  return null
+}
+
+export function getPreferredRetrievalScoreLabel(
+  meta?: RetrievalMeta | null,
+): string {
+  return typeof meta?.rerank_score === 'number' ? '精排' : '向量'
+}
+
 /** 拼一条引用调试摘要，用于 title 悬浮提示。 */
 export function formatCitationMeta(citation: ChatCitation): string {
   const meta = citation.retrieval_meta
@@ -78,6 +97,10 @@ export function formatCitationMeta(citation: ChatCitation): string {
 
   if (meta.rrf_score !== null) {
     parts.push(`RRF ${formatRetrievalScore(meta.rrf_score, 4)}`)
+  }
+
+  if (meta.rerank_score !== null && meta.rerank_score !== undefined) {
+    parts.push(`精排 ${formatRetrievalScore(meta.rerank_score, 3)}`)
   }
 
   return parts.join(' · ')

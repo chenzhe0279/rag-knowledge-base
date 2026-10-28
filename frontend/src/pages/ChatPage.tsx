@@ -5,7 +5,9 @@ import remarkGfm from 'remark-gfm'
 import {
   ChatApiError,
   createConversation,
+  deleteConversation as deleteConversationRequest,
   getConversation,
+  listConversations,
   streamChat,
   toChatMessage,
 } from '../api/chat'
@@ -19,6 +21,8 @@ import {
   StopIcon,
 } from '../components/Icons'
 import { AgentStepsPanel } from '../components/AgentStepsPanel'
+import { AnswerVerifyNotice } from '../components/AnswerVerifyNotice'
+import { ConversationHistory } from '../components/ConversationHistory'
 import { QueryRoutePanel } from '../components/QueryRoutePanel'
 import { RetrievalFilterBar } from '../components/RetrievalFilterBar'
 import { RetrievalMetaPanel } from '../components/RetrievalMetaPanel'
@@ -26,6 +30,8 @@ import { summarizeAgentSteps } from '../lib/agentTrace'
 import { QUERY_ROUTE_META } from '../lib/queryRoute'
 import {
   formatCitationMeta,
+  getPreferredRetrievalScore,
+  getPreferredRetrievalScoreLabel,
   getRetrievalSourceKind,
   getRetrievalSourceLabel,
 } from '../lib/retrieval'
@@ -39,6 +45,7 @@ import { formatTime } from '../lib/format'
 import type {
   ChatCitation,
   ChatMessage,
+  ConversationListItem,
   ConversationRead,
 } from '../types/chat'
 import './ChatPage.css'
@@ -89,6 +96,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   const [conversation, setConversation] = useState<ConversationRead | null>(
     null,
   )
+  const [conversationList, setConversationList] = useState<
+    ConversationListItem[]
+  >([])
+  const [conversationTotal, setConversationTotal] = useState(0)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(() =>
@@ -100,6 +113,53 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   const streamRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  const loadConversationList = async (showLoading = false) => {
+    if (showLoading) {
+      setHistoryLoading(true)
+    }
+
+    try {
+      const page = await listConversations(1, 20)
+      setConversationList(page.items)
+      setConversationTotal(page.total)
+      setHistoryError(null)
+    } catch (listError: unknown) {
+      setHistoryError(errorMessage(listError, '会话列表加载失败'))
+    } finally {
+      if (showLoading) {
+        setHistoryLoading(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    let active = true
+
+    listConversations(1, 20)
+      .then((page) => {
+        if (!active) {
+          return
+        }
+        setConversationList(page.items)
+        setConversationTotal(page.total)
+        setHistoryError(null)
+      })
+      .catch((listError: unknown) => {
+        if (active) {
+          setHistoryError(errorMessage(listError, '会话列表加载失败'))
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setHistoryLoading(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     const savedId = window.localStorage.getItem(CONVERSATION_STORAGE_KEY)
@@ -164,26 +224,31 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
   const latestRouteMeta = latestQueryRoute
     ? QUERY_ROUTE_META[latestQueryRoute.route]
     : null
-  const vectorScores = latestCitations
-    .map((citation) => citation.retrieval_meta?.vector_score)
+  const preferredScores = latestCitations
+    .map((citation) => getPreferredRetrievalScore(citation.retrieval_meta))
     .filter((score): score is number => typeof score === 'number')
-  const topVectorScore =
-    vectorScores.length > 0 ? Math.max(...vectorScores) : null
-  const topVectorPercent =
-    topVectorScore === null ? null : Math.round(topVectorScore * 100)
-  const signalValue = topVectorPercent ?? latestCitations.length
+  const topPreferredScore =
+    preferredScores.length > 0 ? Math.max(...preferredScores) : null
+  const topPreferredPercent =
+    topPreferredScore === null ? null : Math.round(topPreferredScore * 100)
+  const hasRerankScore = latestCitations.some(
+    (citation) => typeof citation.retrieval_meta?.rerank_score === 'number',
+  )
+  const signalValue = topPreferredPercent ?? latestCitations.length
   const signalSuffix =
-    topVectorPercent !== null
+    topPreferredPercent !== null
       ? '%'
       : latestCitations.length > 0
         ? '条'
         : ''
   const signalCaption =
-    topVectorPercent !== null
-      ? '最高向量相似度'
+    topPreferredPercent !== null
+      ? hasRerankScore
+        ? '最高精排分'
+        : '最高向量相似度'
       : latestCitations.length > 0
         ? '引用数量'
-        : '最高向量相似度'
+        : '最高精排分'
   const filterError = getFilterDateError(filters)
   const canSend = input.trim().length > 0 && !streaming && !filterError
 
@@ -196,7 +261,68 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
     setInput('')
     setError(null)
     setStreaming(false)
+    setLoading(false)
     inputRef.current?.focus()
+  }
+
+  const openConversation = async (conversationId: string) => {
+    if (streaming || conversationId === conversation?.id) {
+      return
+    }
+
+    abortRef.current?.abort()
+    abortRef.current = null
+    setLoading(true)
+    setError(null)
+
+    try {
+      const detail = await getConversation(conversationId)
+      setConversation(detail.conversation)
+      setMessages(detail.messages.map(toChatMessage))
+      window.localStorage.setItem(
+        CONVERSATION_STORAGE_KEY,
+        detail.conversation.id,
+      )
+    } catch (loadError: unknown) {
+      if (loadError instanceof ChatApiError && loadError.status === 404) {
+        setConversationList((current) =>
+          current.filter((item) => item.id !== conversationId),
+        )
+        setConversationTotal((current) => Math.max(0, current - 1))
+        setError('该会话已被删除，请选择其他会话')
+      } else {
+        setError(errorMessage(loadError, '会话加载失败'))
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteConversation = async (item: ConversationListItem) => {
+    if (streaming) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `确定删除会话「${item.title}」吗？\n删除后聊天记录无法恢复。`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    try {
+      await deleteConversationRequest(item.id)
+      setConversationList((current) =>
+        current.filter((conversation) => conversation.id !== item.id),
+      )
+      setConversationTotal((current) => Math.max(0, current - 1))
+
+      if (conversation?.id === item.id) {
+        startNewConversation()
+      }
+    } catch (deleteError: unknown) {
+      setError(errorMessage(deleteError, '删除会话失败'))
+    }
   }
 
   const sendQuestion = async (rawQuestion: string) => {
@@ -224,6 +350,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           CONVERSATION_STORAGE_KEY,
           activeConversation.id,
         )
+        void loadConversationList(false)
       } catch (createError) {
         setError(errorMessage(createError, '创建会话失败'))
         return
@@ -245,6 +372,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         citations: [],
         queryRoute: null,
         agentSteps: null,
+        verifyResult: null,
       },
       {
         id: assistantId,
@@ -255,6 +383,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         citations: [],
         queryRoute: null,
         agentSteps: null,
+        verifyResult: null,
       },
     ])
     setInput('')
@@ -325,6 +454,29 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
               ),
             )
           },
+          onVerifyResult: (verifyResult) => {
+            setMessages((current) =>
+              current.map((message) => {
+                if (message.id !== assistantId) {
+                  return message
+                }
+
+                const replacedContent =
+                  !verifyResult.verified && verifyResult.replacement_answer
+                    ? verifyResult.replacement_answer
+                    : message.content
+
+                return {
+                  ...message,
+                  content: replacedContent,
+                  verifyResult: {
+                    verified: verifyResult.verified,
+                    reason: verifyResult.reason ?? null,
+                  },
+                }
+              }),
+            )
+          },
           onMessageEnd: ({ message_id }) => {
             ended = true
             setStreaming(false)
@@ -335,6 +487,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                   : message,
               ),
             )
+            void loadConversationList(false)
           },
           onStreamError: ({ message }) => {
             ended = true
@@ -412,8 +565,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           <p className="hero__lead">
             基于已入库文档进行检索与生成。Agent 会先规划检索，观察召回数量与
             Top 语义相似度，必要时改写查询、切换策略或主动拒答；随后通过向量语义
-            与关键词全文的混合检索、RRF 融合排序，再流式生成回答。完整决策轨迹会
-            随消息保留。
+            与关键词全文的混合检索、RRF 融合与 rerank 精排，再由答案可信度校验
+            决定最终输出。完整决策轨迹、会话历史和校验结果都会保留。
           </p>
         </div>
         <div className="chat-hero__aside">
@@ -431,6 +584,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             <span>HyDE</span>
             <span>Multi-Query</span>
             <span>Hybrid + RRF</span>
+            <span>Rerank</span>
+            <span>Verified</span>
           </div>
         </div>
       </section>
@@ -445,7 +600,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             <h2>{conversation?.title ?? '新的知识对话'}</h2>
             <p className="chat-rail__caption">
               {conversation
-                ? `${messages.length} 条消息 · 本地保留会话`
+                ? `${messages.length} 条消息 · 服务端保留会话`
                 : '发送第一个问题后自动创建会话'}
             </p>
             <div className="chat-rail__meta">
@@ -489,6 +644,24 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
             </button>
           </div>
 
+          <ConversationHistory
+            items={conversationList}
+            activeId={conversation?.id ?? null}
+            total={conversationTotal}
+            loading={historyLoading}
+            error={historyError}
+            disabled={streaming || loading}
+            onSelect={(conversationId) => {
+              void openConversation(conversationId)
+            }}
+            onDelete={(item) => {
+              void handleDeleteConversation(item)
+            }}
+            onRetry={() => {
+              void loadConversationList(true)
+            }}
+          />
+
           <div className="chat-rail__card chat-rail__card--signal">
             <div className="chat-rail__eyebrow">HYBRID RETRIEVAL</div>
             <div className="chat-signal__score">
@@ -506,18 +679,22 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
               aria-label="引用匹配度图表"
             >
               {(latestCitations.length
-                ? latestCitations.slice(0, 5).map((citation, index) => ({
-                    key: citation.ordinal,
-                    height:
-                      typeof citation.retrieval_meta?.vector_score === 'number'
-                        ? Math.max(
-                            18,
-                            Math.round(
-                              citation.retrieval_meta.vector_score * 100,
-                            ),
-                          )
-                        : Math.max(22, 64 - index * 10),
-                  }))
+                ? latestCitations.slice(0, 5).map((citation, index) => {
+                    const preferredScore = getPreferredRetrievalScore(
+                      citation.retrieval_meta,
+                    )
+
+                    return {
+                      key: citation.ordinal,
+                      height:
+                        typeof preferredScore === 'number'
+                          ? Math.min(
+                              100,
+                              Math.max(18, Math.round(preferredScore * 100)),
+                            )
+                          : Math.max(22, 64 - index * 10),
+                    }
+                  })
                 : [28, 44, 34, 52, 38].map((height, index) => ({
                     key: `empty-${index}`,
                     height,
@@ -535,7 +712,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                   const kind = getRetrievalSourceKind(
                     citation.retrieval_meta,
                   )
-                  const vectorScore = citation.retrieval_meta?.vector_score
+                  const preferredScore = getPreferredRetrievalScore(
+                    citation.retrieval_meta,
+                  )
+                  const preferredLabel = getPreferredRetrievalScoreLabel(
+                    citation.retrieval_meta,
+                  )
                   const keywordRank = citation.retrieval_meta?.keyword_rank
 
                   return (
@@ -561,8 +743,10 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                         </span>
                       ) : null}
                       <span className="chat-source-row__score">
-                        {typeof vectorScore === 'number'
-                          ? `V ${Math.round(vectorScore * 100)}%`
+                        {typeof preferredScore === 'number'
+                          ? `${
+                              preferredLabel === '精排' ? 'R' : 'V'
+                            } ${Math.round(preferredScore * 100)}%`
                           : typeof keywordRank === 'number'
                             ? `K #${keywordRank}`
                             : typeof citation.score === 'number'
@@ -583,7 +767,7 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
           <p className="chat-rail__footnote">
             `message_start → query_route → agent_steps`
             <br />
-            `citations → token → message_end`
+            `citations → token → verify_result → message_end`
             <br />
             由 FastAPI SSE 推送
           </p>
@@ -613,7 +797,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                 <h2>从一份文档开始</h2>
                 <p>
                   问一个具体问题，Agent 会先规划检索并在信息不足时改写查询或切换策略，
-                  再基于命中的知识片段生成回答。完整决策轨迹、路由快照和检索排名都会随消息保留。
+                  混合检索结果会经过 RRF 融合与 rerank 精排，答案再通过引用可信度校验后
+                  输出。决策轨迹、路由快照、检索排名和校验结果都会随消息保留。
                 </p>
                 <div className="chat-suggestions">
                   {SUGGESTIONS.map((suggestion) => (
@@ -676,6 +861,10 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                           <span className="chat-caret" aria-hidden="true" />
                         ) : null}
                       </div>
+
+                      {isAssistant ? (
+                        <AnswerVerifyNotice result={message.verifyResult} />
+                      ) : null}
 
                       {isAssistant && message.agentSteps ? (
                         <AgentStepsPanel

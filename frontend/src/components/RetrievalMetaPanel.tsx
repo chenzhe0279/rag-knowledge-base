@@ -41,7 +41,7 @@ export function RetrievalMetaPanel({
         <span className="chat-route-debug__heading">
           <span className="chat-route-debug__eyebrow">
             <i aria-hidden="true" />
-            HYBRID RETRIEVAL · RRF
+            HYBRID RETRIEVAL · RRF · RERANK
             {live ? <em>实时</em> : null}
           </span>
           <strong>混合检索快照</strong>
@@ -57,7 +57,10 @@ export function RetrievalMetaPanel({
 
       <div className="chat-route-debug__body">
         <div className="chat-route-debug__intro">
-          <p>向量语义召回 + 关键词全文召回，按倒数排名融合（RRF，k=60）。</p>
+          <p>
+            向量语义召回 + 关键词全文召回，先按 RRF（k=60）融合，
+            再由 reranker 对候选片段精排；精排分作为最终上下文闸门。
+          </p>
           <span className="chat-route-debug__state">
             {live ? '正在融合' : '已随消息持久化'}
           </span>
@@ -82,6 +85,7 @@ export function RetrievalMetaPanel({
                 <th>向量路</th>
                 <th>关键词路</th>
                 <th>RRF</th>
+                <th>Rerank</th>
               </tr>
             </thead>
             <tbody>
@@ -132,6 +136,11 @@ export function RetrievalMetaPanel({
                         {formatRetrievalScore(meta.rrf_score, 4)}
                       </span>
                     </td>
+                    <td>
+                      <span className="chat-retrieval-debug__rerank">
+                        {formatRetrievalScore(meta.rerank_score, 3)}
+                      </span>
+                    </td>
                   </tr>
                 )
               })}
@@ -141,7 +150,7 @@ export function RetrievalMetaPanel({
 
         <div className="chat-route-debug__footer">
           <span>
-            <i aria-hidden="true" /> route_query → vector + keyword → rrf_fuse
+            <i aria-hidden="true" /> vector + keyword → rrf_fuse → rerank
           </span>
           <code>k=60</code>
         </div>
