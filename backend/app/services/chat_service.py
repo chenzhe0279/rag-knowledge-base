@@ -1,7 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.util import await_
 
+from app.core.config import settings
 from app.core.logger import get_logger
+from app.llm.answer_verifier import VerifyResult, get_answer_verifier
+from app.llm.prompts import REFUSAL_ANSWER
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.vector_retriever import RetrievedChunk
 from uuid import UUID
@@ -83,10 +86,13 @@ class ChatService:
     # 定义异步生成器方法：处理流式问答，逐个事件（Event）向前端 yield SSE（Server-Sent Events）数据
     async def stream_answer(self, conversation_id: UUID, question: str,  filters: RetrievalFilter | None = None,) -> AsyncIterator[dict]:
         """逐事件 yield SSE 载荷。
-
-        事件协议（与前端约定）：
-            message_start -> citations -> token... -> message_end
-        任何阶段出错则改 yield error 并提前结束。
+           事件协议（与前端约定）：
+           message_start -> query_route -> agent_steps -> citations -> token...
+           -> [verify_result] -> message_end
+           - 拒答路径不发 verify_result（拒答本身已经是终态）
+           - verify_result.verified=False 时携带 replacement_answer，前端按它整段
+          替换流式出来的答案，与 PRD"校验失败 -> 拒答替换"对齐
+           - 任何阶段出错则改 yield error 并提前结束。
         """
 
         # 校验会话存在用 service 自带 session；流式跑用独立 session
@@ -173,6 +179,7 @@ class ChatService:
                 # 4. 生成：拒答直接走拒答文案；否则逐 token 流式
                 # 检查 state 中的 refused 标记，如果为 True 说明检索质量太差，触发了拒答机制
                 if state.get("refused"):
+                    verify_result: VerifyResult | None = None
                     # 如果是拒答，直接把 state 里预存好的拒答文案（REFUSAL_ANSWER）作为 token 推给前端
                     yield {
                         "event": "token",
@@ -190,10 +197,39 @@ class ChatService:
                         yield {"event": "token", "data": {"delta": delta}}
                     # 流式生成结束后，把所有片段拼接成完整的回答，存回 state 中
                     state["answer"] = "".join(answer_parts)
+                    # 6. 答案校验，verify 失败替换为拒答文案
+                    if settings.verify_answer_enabled:
+                        # 调用校验器（异步），传入用户问题、模型生成的答案以及检索到的上下文块
+                        verify_result = await get_answer_verifier().verify(
+                            question=state["query"],
+                            answer=state["answer"],
+                            # 从 state 中获取 retrieved_chunks，如果没有则返回空列表
+                            chunks=list(state.get("retrieved_chunks", [])),
+                        )
 
-                # 5. assistant 消息 + citations 同事务落库（保证两者原子）
-                # 将 AI 的完整回答以及引用记录，在同一个数据库事务中保存下来，防止产生“有回答无引用”的脏数据
-                await self._persist_assistant_message(state, session)
+                        # 如果校验失败（verified=False），则将替换文案设为预定义的拒答文案；如果校验通过则为 None
+                        if not verify_result.verified:
+                            replacement = REFUSAL_ANSWER
+                            state["answer"] = REFUSAL_ANSWER
+                            state["refused"] = True
+                        else:
+                            replacement = None
+
+                        # 向前端 yield（发送）一个 SSE 事件，告知前端校验结果
+                        yield {
+                            "event": "verify_result",
+                            # 调用之前定义的 _build_verify_payload 构建载荷
+                            # 注意：只有 verified=False 时，replacement 才会有值并被打包进去
+                            "data": _build_verify_payload(
+                                verify_result, replacement_answer=replacement
+                            ),
+                        }
+
+                    # 7. assistant 消息 + citations 同事务落库（保证两者原子）
+                    # 无论校验是否通过，都需要将最终的 assistant 消息（可能是替换后的拒答文案）持久化到数据库
+                    await self._persist_assistant_message(
+                        state, session, verify_result=verify_result
+                    )
 
                 # 发送最后一个 SSE 事件：通知前端对话生成已完全结束，并回传助手消息的 ID 和是否拒答的状态
                 yield {
@@ -252,11 +288,31 @@ class ChatService:
         state["user_message_id"] = user_msg.id
 
     # 定义内部异步方法：持久化助手（AI）消息及其引用
-    async def _persist_assistant_message(self, state: RAGState, session: AsyncSession) -> None:
+    async def _persist_assistant_message(self, state: RAGState, session: AsyncSession, *, verify_result: VerifyResult | None) -> None:
         """流式生成结束后落库 assistant 消息及其引用，单事务保证两者原子。"""
         # 实例化对话仓储和引用仓储，复用同一个数据库会话
         conv_repo = ConversationRepository(session)
         citation_repo = AnswerCitationRepository(session)
+
+        # 初始化要附加的元数据字典
+        extra_metadata: dict = {
+            # 将 state 中的 refused 状态强转为布尔值并记录
+            "refused": bool(state.get("refused")),
+            # 构建并记录查询路由信息（调用外部辅助函数）
+            "query_route": _build_query_route_payload(state),
+            # 序列化并记录 Agent 的步骤信息（调用外部辅助函数）
+            "agent_steps": _serialize_agent_steps(state),
+            # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
+            "retrieval_filters": _build_filter_payload(state.get("filters")),
+        }
+
+        # 如果存在校验结果（即走过了校验流程）
+        if verify_result is not None:
+            # verify_result 复用 SSE 载荷格式，但 metadata 不需要 replacement_answer
+            # 因此这里显式传入 replacement_answer=None，只保留 verified 和 reason 状态
+            extra_metadata["verify_result"] = _build_verify_payload(
+                verify_result, replacement_answer=None
+            )
 
         # 调用 ConversationRepository 的静态工厂方法，构建一条 AI（助手）角色的消息实体。
         # 该方法会在内部自动补全角色的枚举值（MessageRole.ASSISTANT），并设置相关的默认字段。
@@ -268,23 +324,7 @@ class ChatService:
             content=state["answer"],
 
             # 【核心设计】：构建 JSONB 格式的扩展元数据 (extra_metadata)。
-            extra_metadata={
-                # 1. 记录本轮回答是否触发了系统的“拒答”机制（如果检索质量太差就会拒答）。
-                # 使用 bool() 强转，确保存入的一定是 true/false，而不是 None 或其他类型。
-                "refused": bool(state.get("refused")),
-
-                # 2. 记录完整的查询优化信息。
-                # 调用 _build_query_route_payload 函数，它会将 route(策略)、query(实际检索词)、
-                # rewritten_query(改写后文本)、hyde_answer(假设文档) 等打包成一个干净的字典。
-                # 这样前端不仅能展示最终回答，还能像上帝视角一样看到 AI 在后台是怎么思考和检索的。
-                "query_route": _build_query_route_payload(state),
-
-                # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
-                "retrieval_filters": _build_filter_payload(state.get("filters")),
-
-                # 3. 记录 Agent 的执行步骤。
-                "agent_steps": _serialize_agent_steps(state),
-            },
+            extra_metadata=extra_metadata
         )
         # 将 AI 消息实体添加到会话中（生成主键）
         await conv_repo.add_messages([assistant_msg])
@@ -424,6 +464,11 @@ def _build_retrieval_meta(chunk: RetrievedChunk) -> dict:
         "rrf_score": (
             round(chunk.rrf_score, 6) if chunk.rrf_score is not None else None
         ),
+
+        # 7. 重排序得分。
+        "rerank_score": (
+            round(chunk.rerank_score, 4) if chunk.rerank_score is not None else None
+        ),
     }
 
 
@@ -479,3 +524,24 @@ def _serialize_agent_steps(state: RAGState) -> list[dict]:
 
     # 6. 返回最终组装好的新列表
     return result
+
+
+def _build_verify_payload(result: VerifyResult, *, replacement_answer: str | None) -> dict:
+    """verify_result SSE / metadata 共用载荷。
+
+    replacement_answer 仅在 verified=False 时携带；前端按它整段替换流式出来的答案，
+    与 PRD"verify 失败 -> 拒答替换"语义对齐。
+    """
+    # 初始化基础 payload 字典
+    payload: dict = {
+        "verified": result.verified,
+
+        "reason": result.reason or None,
+    }
+
+    # 判断条件：只有在校验未通过 (verified=False) 并且提供了替换答案时
+    # 才将 replacement_answer 字段加入 payload 中
+    if not result.verified and replacement_answer is not None:
+        payload["replacement_answer"] = replacement_answer
+
+    return payload

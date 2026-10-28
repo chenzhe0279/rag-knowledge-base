@@ -21,12 +21,7 @@ class VerifyResult:
 class AnswerVerifier:
     """LLM 答案可信度校验器。"""
 
-    async def verify(
-            self,
-            question: str,
-            answer: str,
-            chunks: list[RetrievedChunk],
-    ) -> VerifyResult:
+    async def verify(self, question: str, answer: str, chunks: list[RetrievedChunk],) -> VerifyResult:
         # 前置条件判断：如果没有检索到任何上下文（chunks），或者模型的回答为空
         # 则直接跳过校验。原因可能是：
         # 1. 拒答场景（如业务层已标记为 refused）
