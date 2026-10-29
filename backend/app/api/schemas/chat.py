@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.core.observability import build_trace_url
 from app.retrieval.filters import RetrievalFilter
 
 # 定义消息角色的字面量类型，限制只能传入这三种系统预设的角色
@@ -207,6 +209,10 @@ class MessageRead(BaseModel):
     agent_steps: list[AgentStep] | None = None
     # 答案校验结果；user / 旧消息 / 关闭校验时为 None
     verify_result: VerifyResultRead | None = None
+    # 用于追踪本次对话执行链路的 LangSmith 唯一标识符
+    trace_id: str | None = None
+    # 根据 trace_id 和后台配置拼接好的完整跳转链接
+    trace_url: str | None = None
 
     # 定义类方法：将数据库的 Message ORM 对象转换为当前的 Pydantic 响应模型
     @classmethod
@@ -214,7 +220,11 @@ class MessageRead(BaseModel):
 
         # 提前判断当前消息是不是 AI 助手发出的
         is_assistant = message.role == "assistant"
-
+        # ===== 处理 trace_id 字段 =====
+        if is_assistant:
+            trace_id = _parse_trace_id(message.extra_metadata)
+        else:
+            trace_id = None
         # ===== 处理引用列表 (citations) =====
         if is_assistant:
             # 如果是 AI 回答：遍历它的引用记录，转换成 Pydantic 模型列表
@@ -259,6 +269,8 @@ class MessageRead(BaseModel):
             query_route=query_route,# 传入上面计算好的路由信息
             agent_steps=agent_steps,
             verify_result=verify_result,
+            trace_id=trace_id,
+            trace_url=build_trace_url(trace_id),
         )
 
 
@@ -315,6 +327,28 @@ def _parse_query_route(metadata: dict | None) -> QueryRouteRead | None:
         # 绝不能因为调试面板的数据解析失败，就导致整个“获取历史消息列表”的接口直接返回 500 错误。
         # 解析失败无非就是前端看不到调试面板而已，核心的聊天记录必须能正常展示。
         return None
+
+
+def _parse_trace_id(metadata: dict | None) -> str | None:
+    """从 messages.extra_metadata 中提取 trace_id。"""
+    # 1. 前置防御：如果传入的 metadata 为空（None 或空字典），直接返回 None
+    if not metadata:
+        return None
+
+    # 2. 安全获取：使用 .get() 方法提取 trace_id。
+    # 如果字典里没有这个 key，会默认返回 None，不会抛出 KeyError 异常
+    raw = metadata.get("trace_id")
+
+    # 3. 类型与有效性校验：
+    # - isinstance(raw, str)：确保取出来的是字符串类型（防止存的是数字或对象）
+    # - not raw.strip()：去掉首尾空格后，确保不是空字符串（防止存了 "   " 这种无效数据）
+    # 任一条件不满足，都视为无效数据，返回 None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+
+    # 4. 校验通过，返回干净的 trace_id 字符串
+    return raw
+
 
 
 # 会话详情的响应模型（包含会话基本信息以及该会话下的所有消息历史）

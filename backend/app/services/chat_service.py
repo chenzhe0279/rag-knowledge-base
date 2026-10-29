@@ -1,7 +1,5 @@
-from langsmith import traceable
+from app.core.tracing import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.util import await_
-
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.observability import get_current_trace_id, build_trace_url
@@ -101,7 +99,6 @@ class ChatService:
         # 校验会话存在用 service 自带 session；流式跑用独立 session
         # 前置校验：检查会话是否存在。如果不存在，这里会直接抛出 404 异常，阻断后续流式输出。
         await self.get_conversation(conversation_id)
-
         # 【核心】开启一个独立的数据库会话（Session）。
         # 因为流式响应可能持续几十秒甚至几分钟，不能一直占用 FastAPI 请求级别的短连接，否则会导致数据库连接池耗尽。
         async with AsyncSessionLocal() as session:

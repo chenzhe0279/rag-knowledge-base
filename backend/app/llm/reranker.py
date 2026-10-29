@@ -2,7 +2,7 @@ import dataclasses
 from typing import Any
 
 import httpx
-from langsmith import traceable
+from app.core.tracing import traceable
 
 from app.core.config import settings
 from app.core.exceptions import ConfigurationError

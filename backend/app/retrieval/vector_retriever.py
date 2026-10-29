@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from langsmith import traceable
+from app.core.tracing import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.chunk_repo import DocumentChunkRepository

@@ -12,7 +12,7 @@
 import asyncio
 from uuid import UUID
 
-from langsmith import traceable
+from app.core.tracing import traceable
 
 from app.core.config import settings
 from app.core.logger import get_logger
