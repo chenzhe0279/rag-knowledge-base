@@ -1,8 +1,10 @@
+from langsmith import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.util import await_
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.core.observability import get_current_trace_id, build_trace_url
 from app.llm.answer_verifier import VerifyResult, get_answer_verifier
 from app.llm.prompts import REFUSAL_ANSWER
 from app.retrieval.filters import RetrievalFilter
@@ -84,6 +86,7 @@ class ChatService:
 
 
     # 定义异步生成器方法：处理流式问答，逐个事件（Event）向前端 yield SSE（Server-Sent Events）数据
+    @traceable(name="ChatService.stream_answer", run_type="chain")
     async def stream_answer(self, conversation_id: UUID, question: str,  filters: RetrievalFilter | None = None,) -> AsyncIterator[dict]:
         """逐事件 yield SSE 载荷。
            事件协议（与前端约定）：
@@ -104,12 +107,18 @@ class ChatService:
         async with AsyncSessionLocal() as session:
             # 开启异常捕获，确保任何报错都能优雅地以 SSE 格式通知前端，而不是直接断开连接
             try:
+                # 取 LangSmith trace_id: @traceable 已经为本次 stream_answer 建好 root run,
+                # 这里读到的就是整次问答的 trace_id; 未启用观测时返回 None
+                # get_current_trace_id()必须在进入 @traceable 上下文之内调用，所以放在stream_answer函数体里。
+                trace_id = get_current_trace_id()
                 # 初始化 RAG 状态机（State），用于在各个处理节点之间传递数据
                 state: RAGState = {
                     # 存入会话 ID
                     "conversation_id": conversation_id,
                     # 存入用户当前问题
                     "question": question,
+                    # 存入 trace_id
+                    "trace_id": trace_id,
                     # 存入检索过滤器
                     "filters": filters,
                 }
@@ -129,7 +138,11 @@ class ChatService:
                 # 发送第一个 SSE 事件：通知前端对话已开始，并回传用户消息的数据库 ID
                 yield {
                     "event": "message_start",
-                    "data": {"user_message_id": str(state["user_message_id"])},
+                    "data": {
+                        "user_message_id": str(state["user_message_id"]),
+                        "trace_id": trace_id,
+                        "trace_url": build_trace_url(trace_id),
+                    },
                 }
 
                 # 把query 路由结果推给前端调试面板(始终发送，前端按route选择渲染)
@@ -307,6 +320,8 @@ class ChatService:
             "query_route": _build_query_route_payload(state),
             # 序列化并记录 Agent 的步骤信息（调用外部辅助函数）
             "agent_steps": _serialize_agent_steps(state),
+            # LangSmith trace_id 落库，刷新历史时前端仍可展示 / 跳转
+            "trace_id": state.get("trace_id"),
             # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
             "retrieval_filters": _build_filter_payload(state.get("filters")),
         }

@@ -1,3 +1,4 @@
+from langsmith import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.chunk_repo import DocumentChunkRepository
@@ -18,6 +19,7 @@ class KeywordRetriever:
         self.chunk_repo = DocumentChunkRepository(session)
 
     # 核心方法：接收用户查询字符串和 Top-K 数量，返回检索结果列表
+    @traceable(name=" KeywordRetriever.search", run_type="retriever")
     async def search(self, query: str, top_k: int,  filters: RetrievalFilter | None = None,) -> list[RetrievedChunk]:
         # keyword_search 需要的是 tsquery 字符串，不是原始中文问题。
         # 先走 tokenizer.build_tsquery，把中文切成带引号的 OR 表达式，

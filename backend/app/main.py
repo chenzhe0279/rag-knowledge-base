@@ -8,6 +8,8 @@ from app.core.logger import configure_logging, get_logger
 
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.observability import configure_observability
+
 
 def create_app() -> FastAPI:
     """
@@ -21,6 +23,9 @@ def create_app() -> FastAPI:
 
     # 1. 初始化日志系统（调用之前写好的日志配置函数）
     configure_logging()
+
+    # 2. 初始化可观测性系统（调用之前写好的可观测性配置函数）
+    configure_observability()
 
     # 2. 获取当前模块的 logger 实例（__name__ 此时可能是 main 或 app 等入口模块）
     logger = get_logger(__name__)

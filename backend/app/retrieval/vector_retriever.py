@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from langsmith import traceable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repositories.chunk_repo import DocumentChunkRepository
@@ -81,6 +82,7 @@ class VectorRetriever:
         self.chunk_repo = DocumentChunkRepository(session)
 
     # 核心方法：接收用户查询字符串和 Top-K 数量，返回检索结果列表
+    @traceable(name="VectorRetriever.search", run_type="retriever")
     async def search(self, query: str, top_k: int, filters: RetrievalFilter | None = None,) -> list[RetrievedChunk]:
         # 单 query 走 aembed_query，DashScope 单条调用更直接
         # 调用 Embedding 模型（如阿里云 DashScope），将用户的文本查询转化为向量（list[float]）

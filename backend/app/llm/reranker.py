@@ -2,6 +2,7 @@ import dataclasses
 from typing import Any
 
 import httpx
+from langsmith import traceable
 
 from app.core.config import settings
 from app.core.exceptions import ConfigurationError
@@ -34,6 +35,7 @@ class Reranker:
         return self._client
 
     # 3. 核心方法：执行重排序
+    @traceable(name=" Reranker.rerank", run_type="tool")
     async def rerank(self, query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
         # 3.1 防御性判断：如果候选列表只有 0 条或 1 条，根本不需要排序，直接原样返回，省去一次网络请求。
         if len(candidates) <= 1:
