@@ -912,6 +912,64 @@
   font-weight: 600;
 }
 
+.chat-trace {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 6px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.44);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.chat-trace span {
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.chat-trace .icon {
+  width: 11px;
+  height: 11px;
+  color: var(--accent);
+}
+
+.chat-trace__external {
+  width: 9px;
+  height: 9px;
+  opacity: 0.58;
+}
+
+.chat-trace:hover {
+  color: var(--accent-strong);
+  background: rgba(255, 255, 255, 0.6);
+  border-color: rgba(182, 109, 68, 0.24);
+}
+
+.chat-trace.is-copied {
+  color: #5f7048;
+  background: rgba(111, 127, 90, 0.1);
+  border-color: rgba(111, 127, 90, 0.16);
+}
+
+.chat-trace.is-copied .icon {
+  color: #5f7048;
+}
+
 .chat-message__bubble {
   position: relative;
   max-width: 88%;

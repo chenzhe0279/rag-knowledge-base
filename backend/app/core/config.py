@@ -148,7 +148,7 @@ class Settings(BaseSettings):
 
     # ===== LangSmith 可观测性 =====
     # 关掉后 @traceable / LangChain 自动 trace 全部降级为 no-op，trace_id 返回 None
-    langsmith_tracing: bool = False
+    langsmith_tracing: bool = True
     langsmith_api_key: str = ""
     langsmith_project: str = "rag-knowledge-base"
     langsmith_endpoint: str = "https://api.smith.langchain.com"

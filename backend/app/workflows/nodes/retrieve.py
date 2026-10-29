@@ -66,7 +66,7 @@ def _merge_chunks(bundles: list[list[RetrievedChunk]], top_k: int) -> list[Retri
     # best.values() 拿到所有的 chunk 对象。
     # key=lambda c: c.score 指定按照对象的 score 属性排序。
     # reverse=True 表示降序排列（分数从高到低）。
-    ranked = sorted(best.values(), key=lambda c: c.score, reverse=True)
+    ranked = sorted(best.values(), key=lambda c: c.rrf_score, reverse=True)
 
     # 5. 截取排名前 top_k 个结果返回，防止多路召回合并后数量爆炸
     return ranked[:top_k]

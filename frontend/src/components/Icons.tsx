@@ -279,4 +279,14 @@ export function ShieldCheckIcon(props: IconProps) {
   )
 }
 
+export function TraceIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M3 12h3l2.3-6 4 12 2.4-6H21" />
+      <circle cx="3" cy="12" r="1" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="12" r="1" fill="currentColor" stroke="none" />
+    </Icon>
+  )
+}
+
 

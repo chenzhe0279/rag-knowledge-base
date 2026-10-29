@@ -351,6 +351,14 @@ export function toChatMessage(message: ApiMessageRead): ChatMessage {
     queryRoute: toQueryRoute(message.query_route),
     agentSteps: toAgentSteps(message.agent_steps),
     verifyResult: toVerifyResult(message.verify_result),
+    traceId:
+      typeof message.trace_id === 'string' && message.trace_id
+        ? message.trace_id
+        : null,
+    traceUrl:
+      typeof message.trace_url === 'string' && message.trace_url
+        ? message.trace_url
+        : null,
   }
 }
 
@@ -434,6 +442,14 @@ export async function streamChat(
             if (typeof payload.user_message_id === 'string') {
               handlers.onMessageStart?.({
                 user_message_id: payload.user_message_id,
+                trace_id:
+                  typeof payload.trace_id === 'string'
+                    ? payload.trace_id
+                    : null,
+                trace_url:
+                  typeof payload.trace_url === 'string'
+                    ? payload.trace_url
+                    : null,
               })
             }
             break

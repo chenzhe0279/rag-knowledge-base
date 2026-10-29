@@ -26,6 +26,7 @@ import { ConversationHistory } from '../components/ConversationHistory'
 import { QueryRoutePanel } from '../components/QueryRoutePanel'
 import { RetrievalFilterBar } from '../components/RetrievalFilterBar'
 import { RetrievalMetaPanel } from '../components/RetrievalMetaPanel'
+import { TraceBadge } from '../components/TraceBadge'
 import { summarizeAgentSteps } from '../lib/agentTrace'
 import { QUERY_ROUTE_META } from '../lib/queryRoute'
 import {
@@ -373,6 +374,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         queryRoute: null,
         agentSteps: null,
         verifyResult: null,
+        traceId: null,
+        traceUrl: null,
       },
       {
         id: assistantId,
@@ -384,6 +387,8 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         queryRoute: null,
         agentSteps: null,
         verifyResult: null,
+        traceId: null,
+        traceUrl: null,
       },
     ])
     setInput('')
@@ -409,13 +414,17 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
         question,
         toApiFilters(filters),
         {
-          onMessageStart: ({ user_message_id }) => {
+          onMessageStart: ({ user_message_id, trace_id, trace_url }) => {
             setMessages((current) =>
-              current.map((message) =>
-                message.id === userId
-                  ? { ...message, id: user_message_id }
-                  : message,
-              ),
+              current.map((message) => {
+                if (message.id === userId) {
+                  return { ...message, id: user_message_id }
+                }
+                if (message.id === assistantId) {
+                  return { ...message, traceId: trace_id, traceUrl: trace_url }
+                }
+                return message
+              }),
             )
           },
           onQueryRoute: (queryRoute) => {
@@ -830,6 +839,12 @@ export function ChatPage({ onOpenDocument }: ChatPageProps) {
                         <time>
                           {formatTime(new Date(message.created_at))}
                         </time>
+                        {isAssistant ? (
+                          <TraceBadge
+                            traceId={message.traceId}
+                            traceUrl={message.traceUrl}
+                          />
+                        ) : null}
                       </div>
                       <div className="chat-message__bubble">
                         {isAssistant ? (

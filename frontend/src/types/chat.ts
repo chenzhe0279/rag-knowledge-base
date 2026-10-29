@@ -62,13 +62,15 @@ export interface VerifyResult {
 }
 
 type ApiMessageReadBase = components['schemas']['MessageRead']
-/** 历史接口已返回 agent_steps / verify_result，OpenAPI 未重新生成前先承接原始数据。 */
+/** 历史接口已返回 agent_steps / verify_result / trace 字段，OpenAPI 未重新生成前先承接原始数据。 */
 export type ApiMessageRead = Omit<
   ApiMessageReadBase,
-  'agent_steps' | 'verify_result'
+  'agent_steps' | 'verify_result' | 'trace_id' | 'trace_url'
 > & {
   agent_steps?: unknown
   verify_result?: unknown
+  trace_id?: unknown
+  trace_url?: unknown
 }
 
 /**
@@ -121,10 +123,18 @@ export interface ChatMessage {
   agentSteps: AgentStep[] | null
   /** 答案可信度校验结果。旧消息、user 消息或关闭校验时为 null。 */
   verifyResult: VerifyResult | null
+  /** LangSmith trace_id；未开启可观测性或旧消息为 null。 */
+  traceId: string | null
+  /** LangSmith 跳转链接；未配置 run URL 前缀时为 null。 */
+  traceUrl: string | null
 }
 
 export interface ChatStreamHandlers {
-  onMessageStart?: (payload: { user_message_id: string }) => void
+  onMessageStart?: (payload: {
+    user_message_id: string
+    trace_id: string | null
+    trace_url: string | null
+  }) => void
   /** query_route 事件：query 路由与改写策略的实时快照。 */
   onQueryRoute?: (route: QueryRoute) => void
   /** agent_steps 事件：Agentic RAG 多轮决策与观察轨迹。 */
