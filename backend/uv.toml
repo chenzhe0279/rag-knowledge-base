@@ -4,3 +4,7 @@
 # - 从 vendor/jieba/dist 的本地 wheel 安装 jieba，不联网、不本地编译
 cache-dir = ".uv-cache2"
 find-links = ["vendor/jieba/dist"]
+
+[[index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

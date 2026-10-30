@@ -11,6 +11,9 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    Boolean,
+    Float,
+    Index,
 )
 
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PGUUID
@@ -111,6 +114,31 @@ class Document(Base):
 class DocumentChunk(Base):
     # 表名：存放文档被切分后的文本块（Chunks）
     __tablename__ = "document_chunks"
+
+    # __table_args__ 是 SQLAlchemy 的固定写法，用于定义表的额外属性（如索引、约束等）
+    __table_args__ = (
+        # 索引 1：用于加速向量检索（Vector Search）
+        Index(
+            # 索引的名称
+            "ix_document_chunks_embedding_hnsw",
+            # 对模型中的 "embedding" 字段（通常存的是高维向量）建立索引
+            "embedding",
+            # 使用 PostgreSQL 的 HNSW 算法（一种极其高效的近似最近邻搜索算法）
+            postgresql_using="hnsw",
+            # 指定向量距离度量方式："vector_cosine_ops" 表示使用余弦相似度来计算向量间的距离
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+
+        # 索引 2：用于加速全文检索（Keyword Search / 混合检索）
+        Index(
+            # 索引的名称
+            "ix_document_chunks_content_tsv",
+            # 对模型中的 "content_tsv" 字段（通常是 PostgreSQL 的 tsvector 类型，存的是分词后的文本）建立索引
+            "content_tsv",
+            # 使用 PostgreSQL 的 GIN 索引（倒排索引），这是全文检索性能最高的索引类型
+            postgresql_using="gin",
+        ),
+    )
 
     # 主键 ID：使用 PostgreSQL 原生的 UUID 类型
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -378,3 +406,191 @@ class AnswerCitation(Base):
     # 建立多对一关系：多条引用快照对应一条 AI 消息。
     # 与 Message 模型中的 citations 属性构成双向绑定。
     message: Mapped[Message] = relationship(back_populates="citations")
+
+
+class EvaluationRunStatus(str, Enum):
+    """评测 run 生命周期：BackgroundTasks 跑完前 RUNNING；正常结束 COMPLETED；
+    主流程异常（不是单条 case 异常）置 FAILED 并写 error_message。"""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class EvaluationRun(Base):
+    """RAG 评测任务记录表 (Evaluation Run)。
+
+    作用：
+    用于记录一次完整的“自动化评测任务”的宏观数据。
+    每次用测试集对 RAG 系统进行整体跑批测试时，会在这里生成一条记录。
+    包含三个维度的信息：
+    1. 基本信息与进度：如使用的数据集、总题数、完成/失败数。
+    2. 汇总得分指标：如平均忠实度、平均召回率、拒答准确率等（由单条明细计算汇总而来）。
+    3. 性能与异常：如平均首字延迟、整个任务的起止时间、崩溃时的错误信息。
+    """
+    # 数据库表名
+    __tablename__ = "evaluation_runs"
+
+    # ================= 基础信息 =================
+    # 主键 ID（UUID 类型，自动生成）
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    # 评测任务名称（例如："10月30日-知识库v2回归测试"）
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    # 使用的测试集名称
+    dataset_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 数据集总样本数（总共有多少道题）
+    dataset_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 任务当前状态（运行中/已完成/失败）
+    status: Mapped[EvaluationRunStatus] = mapped_column(String(16), nullable=False)
+
+    # ================= 进度追踪 =================
+    # 计划评测总数
+    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 已完成数
+    progress_completed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 单题失败数（非整体崩溃）
+    progress_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # ================= RAG 评测指标（跑完后才有值，所以允许为 None） =================
+    # 忠实度（回答是否基于检索内容，无幻觉）
+    faithfulness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 答案相关性（是否答非所问）
+    answer_relevancy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 上下文精确率（检索出的内容有多少是有用的）
+    context_precision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 上下文召回率（有用的内容有多少被找回了）
+    context_recall: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 引用命中率（生成的引用是否准确）
+    citation_hit_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 拒答准确率（该拒答时拒答，不该拒答时正常回答）
+    refusal_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ================= 性能指标 =================
+    # 平均端到端延迟（毫秒）
+    avg_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 平均首 Token 延迟（毫秒），反映用户感知的等待时间（拒答 case 不计入）
+    avg_first_token_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ================= 异常与生命周期 =================
+    # 整体任务失败时的错误信息（Text 适合长文本）
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 开始执行时间
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 结束时间
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 记录创建时间（由数据库自动生成）
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # ================= 关联关系 =================
+    # 一对多关系：一个 Run 包含多个 Item（具体的题目评测明细）
+    items: Mapped[list["EvaluationItem"]] = relationship(
+        back_populates="run",
+        # 级联删除：删 Run 时自动删除其下的所有 Item，防止产生孤儿数据
+        cascade="all, delete-orphan",
+        # 依赖数据库底层的 ON DELETE CASCADE 规则去删除，提升性能
+        passive_deletes=True,
+    )
+
+
+class EvaluationItem(Base):
+    """RAG 评测单条用例（Case）的明细记录表。
+
+    作用：
+    用于记录一次评测任务（Run）中，每一道具体题目的“答题全过程快照”。
+    一条 Run 记录会对应 N 条 Item 记录（例如测试 100 道题，就有 100 条 Item）。
+    核心包含五个维度的信息：
+    1. 输入快照：把当时的题目、预期答案、预期文档固化下来，防止未来测试集变动导致历史评测结果失真。
+    2. 真实输出：记录系统当时的实际回答、实际引用的文档片段、路由决策等。
+    3. 性能指标：单次问答的总耗时、首字延迟等。
+    4. 量化得分：RAGAS 评分（忠实度、相关性等），以及拒答是否正确。
+    5. 归因分析：如果是错题（Bad Case），记录分类和备注，方便后续针对性优化。
+    """
+    __tablename__ = "evaluation_items"
+
+    # ================= 基础关联信息 =================
+    # 明细记录的唯一主键（UUID）
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    # 外键：所属评测任务的ID（关联 evaluation_runs 表，级联删除，加索引加速查询）
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # ================= 输入快照（从评测集固化而来） =================
+    # 测试用例的原始 ID（例如数据集里的题号 q_001）
+    case_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # 用户提问（题目内容）
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    # 期望的参考答案
+    expected_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    # 期望命中的文档名称列表（存 JSON 数组，如 ["员工手册.pdf", "考勤制度.pdf"]）
+    expected_document_names: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # 期望回答中必须包含的关键词列表（存 JSON 数组，用于简单规则校验）
+    expected_keywords: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # 这道题是否“应该被系统拒答”（比如超出知识库范围或包含敏感词）
+    should_refuse: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # 题目的分类标签（如 ["财务", "复杂查询"]，方便分场景统计得分）
+    tags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    # ================= 实际运行输出（RAG 系统真实表现） =================
+    # 系统实际生成的回答文本
+    actual_answer: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 系统实际是否触发了拒答机制
+    actual_refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 系统实际生成的引用片段列表（对应回答里的 [1]、[2]）
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # 系统实际检索出的底层文本块元数据（用于深度排查检索质量）
+    retrieved_chunks_meta: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # 查询路由/改写的结果（系统决定怎么去搜，如改写了关键词，允许为空）
+    query_route: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Agent 执行过程中的思考/工具调用步骤记录（允许为空）
+    agent_steps: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 答案校验节点的结果（比如是否被校验器判定为幻觉并替换，允许为空）
+    verify_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # LangSmith 的调用链路追踪 ID（排查问题专用，允许为空）
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ================= 性能与异常 =================
+    # 生成完整回答的总耗时（毫秒）
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 首个 token 吐出的延迟（毫秒），反映用户等待感，拒答时可能为空
+    first_token_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 运行这道题时如果报错，记录的错误信息
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ================= RAGAS 评测指标（跑完后才计算，允许为空） =================
+    # 忠实度：回答是否完全基于检索内容，无幻觉
+    faithfulness: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 答案相关性：回答是否答非所问
+    answer_relevancy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 上下文精确率：检索出的内容中有多少是真正有用的
+    context_precision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 上下文召回率：所有有用的内容是否都被找回了
+    context_recall: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # ================= 拒答与引用专项指标 =================
+    # 引用是否命中：回答中标注的引用是否真的对上了（拒答 case 为 None，不参与算分）
+    citation_hit: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # 拒答行为是否正确：该拒答的时候拒了，或不该拒答的时候正常答了
+    refusal_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    # ================= Bad Case 归因 =================
+    # 是否被标记为“坏例子”（通常由规则初筛，或人工前端修改）
+    is_bad_case: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 坏例子的分类（如：“检索失败”、“大模型幻觉”、“格式错误”）
+    bad_case_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 人工排查时的详细备注说明
+    bad_case_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ================= 生命周期 =================
+    # 这条记录在数据库里生成的时间
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # ================= 关联关系 =================
+    # 反向关联：指向所属的宏观评测任务对象
+    run: Mapped[EvaluationRun] = relationship(back_populates="items")
