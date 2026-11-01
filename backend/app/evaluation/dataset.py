@@ -105,7 +105,6 @@ def _parse_case(data: dict, *, line_no: int, dataset: str) -> EvaluationCase:
             # 强制转为字符串，防止用户在 jsonl 里填了数字或 null 导致类型错误
             expected_answer=str(data.get("expected_answer", "")),
 
-            # 【防坑技巧】data.get() 如果取不到值，默认返回 None。
             # 如果写成 list(None) 会直接报错崩溃。
             # 所以这里用了 `or []`：如果取出来是 None（假值），就变成 list([])，从而安全地转为空列表。
             expected_document_names=list(data.get("expected_document_names") or []),
