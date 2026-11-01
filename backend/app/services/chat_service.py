@@ -22,9 +22,12 @@ from app.workflows.nodes import (
     route_query,
     stream_generate,
 )
+import time
+from dataclasses import dataclass, field
 from app.workflows.rag_state import RAGState
 # 获取当前模块的日志记录器，用于打印该文件产生的运行日志
 logger = get_logger(__name__)
+
 # 定义聊天服务类，封装与对话相关的核心业务逻辑
 class ChatService:
     """注意：
@@ -415,6 +418,129 @@ class ChatService:
         # 如果删除成功，提交数据库事务（真正写入数据库）
         await self.session.commit()
 
+    # 使用 LangSmith 的 @traceable 装饰器进行追踪，追踪名称定为评测专用接口
+    @traceable(name="ChatService.answer_for_evaluation", run_type="chain")
+    async def answer_for_evaluation(self, question: str) -> "EvaluationAnswer":
+        """跑一遍完整 RAG 拿非流式结果，用于离线评测。
+
+        与 stream_answer 区别：
+        - 不创建 conversation，不落 user/assistant 消息（评测不污染线上历史）
+        - chat_history 强制空：评测集每条独立，contextualize 改写自动跳过
+        - 把流式 token 聚合成完整 answer 后再做 verify_answer 校验
+        - 失败时把 error_message 落到 EvaluationAnswer，由调用方决定怎么记录
+        """
+        # 记录开始时间，用于后续计算总耗时和首 token 延迟
+        started_at = time.perf_counter()
+
+        # 获取当前链路追踪的 trace_id
+        trace_id = get_current_trace_id()
+
+        # 初始化 RAG 状态机
+        state: RAGState = {
+            "conversation_id": UUID(int=0),  # 占位，评测不写库所以用不到真实的会话ID
+            "question": question,
+            "chat_history": [],  # 强制清空历史，保证评测样本独立
+            "trace_id": trace_id,
+        }
+
+        try:
+            # 执行 RAG 主图的整个流程（包含检索、路由、生成等节点）
+            final_state = await get_rag_graph().ainvoke(state)
+            # 将执行完的最终状态更新回当前的 state 字典中
+            state.update(final_state)  # type: ignore[arg-type]
+
+            # 初始化校验结果和首 token 延迟变量
+            verify_result: VerifyResult | None = None
+            first_token_latency_ms: int | None = None
+
+            # 如果检索阶段直接触发了拒答，直接拿取预置的拒答文案
+            if state.get("refused"):
+                answer = state["answer"]
+            else:
+                # 如果没有拒答，进入正常的大模型生成环节
+                # stream_generate 是 AsyncIterator[str]，评测里直接拼成整段；
+                # 首个 token yield 时记录耗时，作为「首 token 延迟」指标
+                parts: list[str] = []
+                async for delta in stream_generate(state):
+                    # 如果是第一个吐出来的 token，记录一下距离开始过了多久（毫秒）
+                    if first_token_latency_ms is None:
+                        first_token_latency_ms = int(
+                            (time.perf_counter() - started_at) * 1000
+                        )
+                    # 把流式吐出来的碎片收集起来
+                    parts.append(delta)
+                # 把所有碎片拼接成完整的回答文本
+                answer = "".join(parts)
+                state["answer"] = answer
+
+            # 如果开启了答案校验开关，开始执行校验逻辑
+            if settings.verify_answer_enabled:
+                verify_result = await get_answer_verifier().verify(
+                    question=question,
+                    answer=answer,
+                    chunks=list(state.get("retrieved_chunks", [])),
+                )
+                # 如果校验没通过（出现了幻觉或不符合要求）
+                if not verify_result.verified:
+                    # 与 stream_answer 同口径：校验失败覆盖成统一拒答
+                    answer = REFUSAL_ANSWER
+                    state["answer"] = answer
+                    state["refused"] = True
+
+            # 提取最终检索到的文本块列表和拒答状态
+            chunks = list(state.get("retrieved_chunks", []))
+            refused = bool(state.get("refused"))
+
+            # 先准备一个空列表，作为兜底的默认值
+            citations = []
+
+            # 如果系统“没有”拒答，才去正常构建引用列表
+            if not refused:
+                # 准备一个临时列表用来装构建好的引用
+                temp_citations = []
+                # 遍历 chunks，enumerate(..., 1) 表示序号从 1 开始
+                for i, c in enumerate(chunks, 1):
+                    # 把每一个文本块序列化成前端需要的格式
+                    item = _serialize_citation(c, ordinal=i)
+                    # 塞进临时列表
+                    temp_citations.append(item)
+                # 把构建好的列表赋值给 citations
+                citations = temp_citations
+
+            # 组装并返回成功时的 EvaluationAnswer 对象
+            return EvaluationAnswer(
+                answer=answer,
+                refused=refused,
+                chunks=chunks,
+                query_route=_build_query_route_payload(state),
+                agent_steps=_serialize_agent_steps(state),
+                verify_result=verify_result,
+                trace_id=trace_id,
+                # 计算总耗时（毫秒）
+                latency_ms=int((time.perf_counter() - started_at) * 1000),
+                first_token_latency_ms=first_token_latency_ms,
+                citations=citations,
+            )
+
+        # 捕获整个流程中可能出现的任何异常
+        except Exception as exc:
+            # 记录异常日志，带上导致报错的 question
+            logger.exception("evaluation answer failed: question=%r", question)
+
+            # 发生异常时，返回一个包含了 error_message 的兜底 EvaluationAnswer
+            return EvaluationAnswer(
+                answer="",
+                refused=False,
+                chunks=[],
+                query_route=_build_query_route_payload(state),
+                agent_steps=_serialize_agent_steps(state),
+                verify_result=None,
+                trace_id=trace_id,
+                latency_ms=int((time.perf_counter() - started_at) * 1000),
+                first_token_latency_ms=None,
+                # 尽量把异常信息转成字符串，如果没有则用异常类名兜底
+                error_message=str(exc).strip() or exc.__class__.__name__,
+            )
 
 
 # 定义内部函数：将检索到的文本块对象序列化为字典格式，用于通过 SSE 推送给前端
@@ -588,3 +714,47 @@ def _build_verify_payload(result: VerifyResult, *, replacement_answer: str | Non
         payload["replacement_answer"] = replacement_answer
 
     return payload
+
+
+@dataclass(frozen=True)
+class EvaluationAnswer:
+    """评测专用：跑一遍 RAG 拿到的非流式结果快照。
+
+    与 stream_answer 不同：不写 conversations / messages，避免评测污染线上历史。
+    chunks 直接给原始 RetrievedChunk，便于上层算 RAGAS retrieved_contexts。
+    """
+
+    # 系统最终生成的完整回答文本
+    answer: str
+
+    # 是否触发了拒答机制
+    refused: bool
+
+    # 检索到的原始文本块列表，用于后续给 RAGAS 算 retrieved_contexts
+    chunks: list[RetrievedChunk]
+
+    # 查询路由/改写的结果记录
+    query_route: dict
+
+    # Agent 执行过程中的思考/工具调用步骤记录
+    agent_steps: list[dict]
+
+    # 答案校验节点的结果，如果没有走校验流程则为 None
+    verify_result: VerifyResult | None
+
+    # LangSmith 的调用链路追踪 ID
+    trace_id: str | None
+
+    # 整个问答流程的总耗时（毫秒）
+    latency_ms: int
+
+    # 首 token 延迟（毫秒）：从 stream_answer 开始到 LLM 吐出第一个 token 为止
+    # 拒答路径 / 报错时为 None
+    first_token_latency_ms: int | None
+
+    # 如果执行过程中报错，记录的错误信息，默认为 None
+    error_message: str | None = None
+
+    # 系统生成的引用列表。使用 field(default_factory=list) 确保每个实例都有独立的空列表，避免共享内存
+    citations: list[dict] = field(default_factory=list)
+
