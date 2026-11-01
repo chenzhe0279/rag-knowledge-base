@@ -289,4 +289,13 @@ export function TraceIcon(props: IconProps) {
   )
 }
 
+export function EvaluationIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9 3h6M10 3v5L4.8 17.2A2.2 2.2 0 0 0 6.8 21h10.4a2.2 2.2 0 0 0 2-3.8L14 8V3" />
+      <path d="M8 14h8" />
+    </Icon>
+  )
+}
+
 

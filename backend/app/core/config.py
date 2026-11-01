@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     @property
     def effective_rerank_api_key(self) -> str:
         """rerank_api_key 留空时回落到 chat_api_key，二者本来就是同一份 DashScope key。"""
-        return self.rerank_api_key or self.chat_api_key
+        return self.rerank_api_key or self.embedding_api_key
 
     # ===== LangSmith 可观测性 =====
     # 关掉后 @traceable / LangChain 自动 trace 全部降级为 no-op，trace_id 返回 None

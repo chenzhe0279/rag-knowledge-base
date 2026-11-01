@@ -33,7 +33,11 @@ import { TiltCard } from './components/TiltCard'
 import { ArrowUpIcon, ClockIcon, ExpandIcon, SparkIcon } from './icons'
 import './DashboardPage.css'
 
-export type DashboardDestination = 'documents' | 'chat' | 'status'
+export type DashboardDestination =
+  | 'documents'
+  | 'chat'
+  | 'evaluations'
+  | 'status'
 
 interface DashboardPageProps {
   onNavigate: (view: DashboardDestination) => void

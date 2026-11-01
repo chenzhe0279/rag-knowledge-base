@@ -85,7 +85,7 @@ async def list_evaluation_runs(session: DbSession, page: int = Query(1, ge=1), p
 # 接口作用：根据任务 ID 获取单个评测任务（Run）的详细状态与得分信息。
 # 前端轮询进度、或者查看任务详情页时会调用此接口。
 # =====================================================================
-@router.get("/runs/{run_id}",response_model=EvaluationRunRead, peration_id="getEvaluationRun",)
+@router.get("/runs/{run_id}",response_model=EvaluationRunRead, operation_id="getEvaluationRun",)
 async def get_evaluation_run(run_id: UUID, session: DbSession) -> EvaluationRunRead:
     # 实例化评测服务层
     service = EvaluationService(session)

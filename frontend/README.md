@@ -82,6 +82,16 @@ npm run dev
 - 回答渲染 Markdown；引用按 `ordinal` 显示，点击可打开来源文档
 - 支持停止生成、新建对话、切换历史会话、Enter 发送 / Shift + Enter 换行
 
+### 评测中心
+
+- 从后端加载 `seed` / `smoke` 等评测集，展示数据集规模
+- 发起评测 run：选择评测集、填写任务名称，后台异步执行
+- 运行中自动轮询进度，完成后展示 RAGAS 指标、引用命中率、拒答准确率和首 Token/端到端延迟
+- case 明细支持分页、只看 Bad Case、按 Bad Case 归因筛选
+- 详情抽屉展示期望答案、实际答案、引用、检索片段元数据、Query Route / Agent Steps / Verify Result
+- 支持人工覆盖 Bad Case 标记、错误分类和备注
+- 支持删除评测任务
+
 ### 系统状态
 
 - 三个独立健康检查卡片：后端 API、PostgreSQL、腾讯云 COS
@@ -107,6 +117,14 @@ npm run dev
 | 知识问答 | `GET` | `/api/conversations/{id}` | 会话详情与历史消息 |
 | 知识问答 | `DELETE` | `/api/conversations/{id}` | 删除会话（204） |
 | 知识问答 | `POST` | `/api/conversations/{id}/chat` | SSE 流式问答（body: `{"question": "...", "filters": {...}}`） |
+| 评测中心 | `GET` | `/api/evaluations/datasets` | 列出评测集与样本数 |
+| 评测中心 | `POST` | `/api/evaluations/runs` | 创建并异步执行评测 run |
+| 评测中心 | `GET` | `/api/evaluations/runs` | 分页列出评测 run |
+| 评测中心 | `GET` | `/api/evaluations/runs/{id}` | 评测 run 详情与汇总指标 |
+| 评测中心 | `DELETE` | `/api/evaluations/runs/{id}` | 删除评测 run |
+| 评测中心 | `GET` | `/api/evaluations/runs/{id}/items` | case 明细分页与 Bad Case 筛选 |
+| 评测中心 | `GET` | `/api/evaluations/items/{id}` | 单条 case 详情 |
+| 评测中心 | `PATCH` | `/api/evaluations/items/{id}` | 人工覆盖 Bad Case 归因与备注 |
 | 系统状态 | `GET` | `/api/health`、`/api/health/db`、`/api/health/cos` | 依赖健康检查 |
 
 ## 同步后端类型

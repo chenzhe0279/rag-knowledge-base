@@ -3,6 +3,7 @@ import {
   BrandIcon,
   ChatIcon,
   DashboardIcon,
+  EvaluationIcon,
   FileTextIcon,
   ServerIcon,
 } from './components/Icons'
@@ -24,13 +25,18 @@ const DocumentsPage = lazy(() =>
     default: module.DocumentsPage,
   })),
 )
+const EvaluationPage = lazy(() =>
+  import('./pages/EvaluationPage').then((module) => ({
+    default: module.EvaluationPage,
+  })),
+)
 const SystemStatusPage = lazy(() =>
   import('./pages/SystemStatusPage').then((module) => ({
     default: module.SystemStatusPage,
   })),
 )
 
-type AppView = 'dashboard' | 'documents' | 'chat' | 'status'
+type AppView = 'dashboard' | 'documents' | 'chat' | 'evaluations' | 'status'
 
 function App() {
   const [view, setView] = useState<AppView>('dashboard')
@@ -54,6 +60,11 @@ function App() {
 
   const showChat = () => {
     setView('chat')
+    setSelectedDocumentId(null)
+  }
+
+  const showEvaluations = () => {
+    setView('evaluations')
     setSelectedDocumentId(null)
   }
 
@@ -130,6 +141,18 @@ function App() {
           <button
             type="button"
             className={
+              view === 'evaluations'
+                ? 'main-nav__item is-active'
+                : 'main-nav__item'
+            }
+            onClick={showEvaluations}
+          >
+            <EvaluationIcon className="icon" />
+            评测中心
+          </button>
+          <button
+            type="button"
+            className={
               view === 'status' ? 'main-nav__item is-active' : 'main-nav__item'
             }
             onClick={showStatus}
@@ -161,6 +184,8 @@ function App() {
           />
         ) : view === 'chat' ? (
           <ChatPage onOpenDocument={openDocumentFromChat} />
+        ) : view === 'evaluations' ? (
+          <EvaluationPage />
         ) : view === 'status' ? (
           <SystemStatusPage />
         ) : (

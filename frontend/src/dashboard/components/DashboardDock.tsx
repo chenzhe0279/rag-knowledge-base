@@ -10,6 +10,7 @@ import type { ComponentType, SVGProps } from 'react'
 import type { MotionValue } from 'framer-motion'
 import {
   ChatIcon,
+  EvaluationIcon,
   FileTextIcon,
   GridIcon,
   PulseIcon,
@@ -29,7 +30,7 @@ interface DashboardDockProps {
   hidden: boolean
   onOverview: () => void
   onOpenModule: (module: 'trend' | 'insight') => void
-  onNavigate: (view: 'documents' | 'chat') => void
+  onNavigate: (view: 'documents' | 'chat' | 'evaluations') => void
 }
 
 const DOCK_ITEMS: DockItem[] = [
@@ -38,6 +39,7 @@ const DOCK_ITEMS: DockItem[] = [
   { id: 'insight', label: '洞察', icon: SparkIcon },
   { id: 'documents', label: '文档', icon: FileTextIcon },
   { id: 'chat', label: '问答', icon: ChatIcon },
+  { id: 'evaluations', label: '评测', icon: EvaluationIcon },
 ]
 
 function DockButton({
@@ -128,6 +130,10 @@ export function DashboardDock({
     }
     if (id === 'chat') {
       onNavigate('chat')
+      return
+    }
+    if (id === 'evaluations') {
+      onNavigate('evaluations')
     }
   }
 

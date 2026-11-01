@@ -3,6 +3,7 @@ import type { ReactNode, SVGProps } from 'react'
 export {
   ChatIcon,
   CloseIcon,
+  EvaluationIcon,
   FileTextIcon,
   LayersIcon,
   SparkIcon,
