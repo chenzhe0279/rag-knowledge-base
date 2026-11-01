@@ -13,10 +13,10 @@ from sqlalchemy import (
     func,
     Boolean,
     Float,
-    Index,
+    Index, Table, Column,
 )
 
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PGUUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
@@ -82,6 +82,20 @@ class Document(Base):
     )
     # 如果解析或向量化失败了，把具体的错误信息记录在这里，方便排查。允许为空。
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # 空数组视为"公开"，任意登录用户可见可检索，
+    # 用于兼容之前上传的存量文档。
+    # 非空数组与用户有效权限标签做数组重叠匹配（admin 持 "*" 通配）。
+    permission_tags: Mapped[list[str]] = mapped_column(
+        ARRAY(String()), nullable=False, default=list, server_default="{}"
+    )
+
+    # 上传者；用户被硬删后该字段置 NULL，文档历史仍保留
+    created_by: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # ===== 时间戳自动管理 =====
     # 记录创建时间，数据库层面自动生成当前时间
@@ -237,8 +251,13 @@ class Conversation(Base):
     # 设置 default="新对话" 使得用户刚创建会话时，即使没想好名字，也能有一个默认标题。
     title: Mapped[str] = mapped_column(String(256), nullable=False, default="新对话")
 
-    # 开发备注：当前为单用户系统，未来引入多用户登录时，需在此添加 user_id 外键字段。
-    # user_id 后面引入用户体系时再加列
+    # SET NULL：用户被硬删后会话仍保留供管理员审计
+    user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # 记录对话创建的时间戳
     created_at: Mapped[datetime] = mapped_column(
@@ -594,3 +613,149 @@ class EvaluationItem(Base):
     # ================= 关联关系 =================
     # 反向关联：指向所属的宏观评测任务对象
     run: Mapped[EvaluationRun] = relationship(back_populates="items")
+
+
+# 定义用户状态的枚举类，继承 str 和 Enum，使其既具有枚举特性又能像字符串一样被 JSON 序列化
+class UserStatus(str, Enum):
+    """用户启用状态。"""
+
+    # 正常启用状态
+    ACTIVE = "active"
+    # 禁用（封禁）状态，无法登录系统
+    DISABLED = "disabled"
+
+
+# 用户 - 角色 多对多关系表。
+# 不抽成 ORM 类是因为本身没有业务字段，纯关系；用 Table 让 SQLAlchemy 自动处理。
+# 这是一个核心的中间表，用于连接用户表和角色表，实现多对多映射（一个用户可有多个角色，一个角色可对应多个用户）
+user_roles_table = Table(
+    # 数据库中的表名
+    "user_roles",
+    # 将表绑定到 SQLAlchemy 的 Base.metadata 上，让框架知道这个表的存在
+    Base.metadata,
+
+    # 第一个字段：用户 ID
+    Column(
+        "user_id",
+        # 使用 PostgreSQL 的 UUID 类型
+        PGUUID(as_uuid=True),
+        # 外键约束：关联 users 表的主键 id。ondelete="CASCADE" 表示如果对应的用户被删除，这条关系记录也会自动删除
+        ForeignKey("users.id", ondelete="CASCADE"),
+        # 将该字段设为主键之一（复合主键）
+        primary_key=True,
+    ),
+
+    # 第二个字段：角色 ID
+    Column(
+        "role_id",
+        # 同样使用 UUID 类型
+        PGUUID(as_uuid=True),
+        # 外键约束：关联 roles 表的主键 id。如果角色被删除，这条关系记录也会自动删除
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        # 将该字段设为主键之一（复合主键）
+        primary_key=True,
+    ),
+)
+
+
+# =====================================================================
+# 类作用：系统用户的主表模型（ORM）。
+# 存储用户的账号信息、密码哈希、状态以及关联的角色。
+# =====================================================================
+class User(Base):
+    """用户主表。"""
+
+    # 数据库表名
+    __tablename__ = "users"
+
+    # 主键 ID，使用 PostgreSQL 的 UUID 类型，默认自动生成
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+
+    # 登录用户名，最大 64 字符，不允许为空，且必须唯一（unique=True 防止重名）
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+    # 密码哈希值（绝不存明文密码）。bcrypt hash 约 60 字符，预留 255 兼容未来切换算法
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # 用户在前端展示的昵称/姓名，最大 128 字符
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    # 用户账号状态（如正常 active、禁用 disabled）。使用之前定义的枚举，默认状态为 ACTIVE
+    status: Mapped[UserStatus] = mapped_column(
+        String(16), nullable=False, default=UserStatus.ACTIVE
+    )
+
+    # 记录创建时间。由数据库服务器生成当前时间（server_default=func.now()），带有时区信息
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # 记录最后更新时间。除了在创建时生成，还配置了 onupdate=func.now()，意味着每次修改该用户信息时，数据库会自动刷新这个时间戳
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    # --- 关联关系 ---
+    # 多对多关系：一个用户对应多个角色（Role）
+    roles: Mapped[list["Role"]] = relationship(
+        # 指定多对多关系使用的中间表（你之前看过的 user_roles_table）
+        secondary=user_roles_table,
+        # 双向绑定：在 Role 类中可以通过 users 属性反向查找到该角色下的所有用户
+        back_populates="users",
+        # 【性能优化】预加载策略：在查询用户时，自动用一条 IN 语句把关联的角色也一并查出来，避免循环查库导致的 N+1 问题
+        lazy="selectin",
+    )
+
+
+# =====================================================================
+# 类作用：系统的角色表模型（ORM）。
+# 用于实现 RBAC（Role-Based Access Control，基于角色的访问控制）。
+# 每个角色拥有一组权限标签，用户通过关联角色来获得权限。
+# =====================================================================
+class Role(Base):
+    """RBAC 角色。
+
+    permission_tags: 角色直接持有的权限标签数组；用户的有效权限 = 各角色 tags 的并集。
+    特殊值 "*" 表示通配（admin）。
+    """
+
+    # 数据库表名
+    __tablename__ = "roles"
+
+    # 主键 ID，使用 PostgreSQL 的 UUID 类型，默认自动生成
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+
+    # 角色名称（如 "admin", "viewer"），最大 64 字符，必须唯一且不为空
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+    # 角色描述（如 "系统管理员，拥有所有权限"），最大 256 字符，默认空字符串
+    description: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+
+    # 【核心字段】权限标签列表。
+    # 使用 PostgreSQL 特有的 ARRAY(String) 数组类型，可以直接存一个字符串列表（如 ["doc:read", "doc:write"]）。
+    # - default=list：在 Python 代码层面，创建对象时默认给一个空列表 []。
+    # - server_default="{}"：在数据库层面，如果直接写 SQL 插入数据，默认值为空数组 '{}'（PostgreSQL 数组字面量）。
+    permission_tags: Mapped[list[str]] = mapped_column(
+        ARRAY(String()), nullable=False, default=list, server_default="{}"
+    )
+
+    # 记录创建时间。由数据库服务器生成当前时间，带有时区信息
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # --- 关联关系 ---
+    # 多对多关系：一个角色对应多个用户（User）
+    users: Mapped[list[User]] = relationship(
+        # 指定多对多关系使用的中间表（user_roles_table）
+        secondary=user_roles_table,
+        # 双向绑定：在 User 类中可以通过 roles 属性反向查找到拥有该角色的所有用户
+        back_populates="roles",
+    )

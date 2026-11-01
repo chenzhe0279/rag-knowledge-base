@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
     "asyncpg>=0.32.0",
+    "bcrypt>=5.0.0",
     "cos-python-sdk-v5>=1.9.44",
     "docling>=2.140.0",
     "fastapi>=0.143.2",
@@ -25,6 +26,7 @@ dependencies = [
     "pgvector>=0.5.1",
     "pillow>=12.3.0",
     "pydantic-settings>=2.16.0",
+    "pyjwt>=2.15.1",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
     "ragas>=0.4.3",

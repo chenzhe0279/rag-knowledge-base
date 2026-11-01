@@ -161,6 +161,19 @@ class Settings(BaseSettings):
         """LangSmith 实际生效条件：开关打开 + key 已配置。任一缺失都视为关闭。"""
         return bool(self.langsmith_tracing and self.langsmith_api_key)
 
+    # ===== 认证 =====
+    # JWT 签名密钥；为空时启动期打 ERROR 警告但不阻断
+    # 生产部署务必改成足够长的随机串
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    # token 默认 24 小时过期
+    jwt_expire_minutes: int = 1440
+
+    # 首次启动种子管理员账号；库内已有用户时跳过
+    default_admin_username: str = "admin"
+    default_admin_password: str = "admin"
+    default_admin_display_name: str = "管理员"
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
