@@ -14,6 +14,17 @@ from fastapi import Header
 from app.services.permission_service import is_admin
 
 
+"""
+FastAPI 依赖项（Dependencies）汇总模块。
+
+【核心作用】
+本文件是整个后端系统的“门卫”与“基础设施”。
+它利用 FastAPI 的依赖注入（Dependency Injection）机制，集中处理横切关注点（Cross-cutting concerns），
+避免在每个具体的业务接口里重复写“查数据库”、“验 Token”、“查权限”的代码。
+"""
+
+
+
 
 # DbSession 是一个可复用的类型别名，用于 FastAPI 依赖注入：
 # - Annotated 是 Python 的类型注解工具，语法是 Annotated[主类型, 附加信息]
