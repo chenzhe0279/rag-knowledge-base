@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config'
+import { authFetch } from '../lib/authSession'
 import { extractApiErrorMessage } from './documents'
 import type {
   BadCaseCategoryValue,
@@ -45,7 +46,7 @@ async function requestJson<T>(
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE_URL}${input}`, init)
+    response = await authFetch(`${API_BASE_URL}${input}`, init)
   } catch {
     throw new EvaluationsApiError('无法连接后端服务，请确认服务已启动')
   }
@@ -105,7 +106,7 @@ export async function deleteEvaluationRun(runId: string): Promise<void> {
   let response: Response
 
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/evaluations/runs/${encodeURIComponent(runId)}`,
       {
         method: 'DELETE',

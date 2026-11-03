@@ -1,5 +1,6 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import { API_BASE_URL } from '../config'
+import { authFetch, getAuthToken, notifyAuthExpired } from '../lib/authSession'
 import { extractApiErrorMessage } from './documents'
 import type {
   AgentActionValue,
@@ -52,7 +53,7 @@ export async function createConversation(
   let response: Response
 
   try {
-    response = await fetch(`${API_BASE_URL}/api/conversations`, {
+    response = await authFetch(`${API_BASE_URL}/api/conversations`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -90,7 +91,7 @@ export async function getConversation(
   let response: Response
 
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`,
       { headers: { Accept: 'application/json' } },
     )
@@ -127,7 +128,7 @@ export async function listConversations(
   let response: Response
 
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/conversations?page=${page}&page_size=${pageSize}`,
       { headers: { Accept: 'application/json' } },
     )
@@ -162,7 +163,7 @@ export async function deleteConversation(
   let response: Response
 
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`,
       {
         method: 'DELETE',
@@ -393,14 +394,20 @@ export async function streamChat(
     body.filters = filters
   }
 
+  const token = getAuthToken()
+  const headers: Record<string, string> = {
+    Accept: 'text/event-stream',
+    'Content-Type': 'application/json',
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
   await fetchEventSource(
     `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}/chat`,
     {
       method: 'POST',
-      headers: {
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body),
       signal,
       openWhenHidden: true,
@@ -409,6 +416,9 @@ export async function streamChat(
         const contentType = response.headers.get('content-type') ?? ''
 
         if (!response.ok) {
+          if (response.status === 401) {
+            notifyAuthExpired()
+          }
           const text = await response.text()
           let payload: unknown = null
           try {

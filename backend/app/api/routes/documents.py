@@ -334,6 +334,7 @@ async def rename_document(_: CurrentAdmin, document_id: UUID, payload: DocumentR
 
 @router.put( "/{document_id}/thumbnail",response_model=DocumentRead,operation_id="uploadDocumentThumbnail")
 async def upload_document_thumbnail(
+    _: CurrentAdmin,
     document_id: UUID,
     session: DbSession,
     file: UploadFile = File(  # multipart/form-data 上传的文件
@@ -350,7 +351,7 @@ async def upload_document_thumbnail(
 # 接口作用：更新指定文档的权限标签（修改文档的密级/可见范围）。
 # 【权限控制】仅管理员可访问。
 # =====================================================================
-@router.patch("/{document_id}/permission-tags", response_model=DocumentRead, peration_id="updateDocumentPermissionTags",)
+@router.patch("/{document_id}/permission-tags", response_model=DocumentRead, operation_id="updateDocumentPermissionTags",)
 async def update_permission_tags(_: CurrentAdmin, document_id: UUID, session: DbSession, payload: DocumentPermissionTagsUpdate,
 ) -> DocumentRead:
     # 实例化文档服务层

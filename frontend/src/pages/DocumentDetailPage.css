@@ -1164,3 +1164,206 @@
     padding: 64px 20px;
   }
 }
+
+/* ---------- 文档可见范围 ---------- */
+
+.detail-permission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.detail-permission-tag {
+  padding: 2px 5px;
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  background: rgba(182, 109, 68, 0.08);
+  border-radius: 4px;
+}
+
+.detail-permission-tag--public {
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.document-permission-dialog {
+  width: min(540px, calc(100vw - 32px));
+}
+
+.document-permission-form {
+  padding: 23px;
+}
+
+.document-permission-form > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.document-permission-form__eyebrow {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.12em;
+}
+
+.document-permission-form h2 {
+  margin: 5px 0 0;
+  color: var(--text-strong);
+  font-size: 23px;
+  font-weight: 620;
+  letter-spacing: -0.045em;
+}
+
+.document-permission-form > header > button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.document-permission-form > header > button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.document-permission-form > p {
+  margin: 14px 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.document-permission-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.document-permission-tags__empty {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.document-permission-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 3px 2px 6px;
+  color: var(--accent-strong);
+  background: rgba(182, 109, 68, 0.1);
+  border-radius: 5px;
+}
+
+.document-permission-tag code {
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.document-permission-tag button {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.document-permission-tag button svg {
+  width: 9px;
+  height: 9px;
+}
+
+.document-permission-tags input {
+  flex: 1;
+  min-width: 130px;
+  padding: 4px;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.document-permission-tags__add {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 7px;
+  color: var(--accent-strong);
+  font-size: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.document-permission-tags__add .icon {
+  width: 10px;
+  height: 10px;
+}
+
+.document-permission-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.document-permission-presets > span {
+  margin-right: 2px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.document-permission-presets button {
+  padding: 3px 6px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  background: rgba(255, 255, 255, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.document-permission-presets button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.document-permission-form__error {
+  margin: 10px 0 0;
+  padding: 7px 9px;
+  color: #7e3328;
+  font-size: 8px;
+  background: rgba(178, 69, 52, 0.08);
+  border: 1px solid rgba(178, 69, 52, 0.15);
+  border-radius: 7px;
+}
+
+.document-permission-form > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 18px;
+  padding-top: 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.48);
+}

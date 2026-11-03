@@ -33,7 +33,23 @@ npm run dev
 
 后端启动后可以访问 `http://127.0.0.1:8000/docs` 查看 Swagger 文档。开发环境下 `/api` 请求由 Vite 代理到 `http://127.0.0.1:8000`，不涉及浏览器跨域。
 
+首次打开前端会进入登录页。数据库为空时后端会自动创建默认管理员，默认账号密码为 `admin / admin`，可通过后端 `.env` 的 `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD` 覆盖。登录成功后所有业务请求会自动携带 JWT。
+
 ## 功能
+
+### 登录与权限
+
+- JWT 登录页：登录后 token 存于 `localStorage`，刷新页面通过 `GET /api/auth/me` 恢复会话
+- 所有受保护接口自动附加 `Authorization: Bearer <token>`；401 统一清空会话并回登录页
+- 顶栏 / 看板头部展示当前账号、角色与有效权限标签，支持退出登录
+- 管理员账号可从账号菜单进入「用户与角色管理」
+- 用户管理：分页查看、创建、改昵称、启用/禁用、重置密码、分配角色、删除用户（不能删除自己）
+- 角色管理：创建/编辑/删除自定义角色，维护文档权限标签；内置 `admin` / `user` 角色不可删除
+- 文档权限：上传时设置可见范围；详情页展示并支持管理员修改标签；管理员始终可见全部文档
+- 非管理员隐藏上传、重命名、重新处理、删除、评测中心等管理员入口
+- 未登录访问任何业务页面都会停留在登录页；登录态失效自动退回登录页
+
+> 默认管理员由后端 `.env` 的 `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD` 决定；未配置时为 `admin / admin`，仅在数据库无用户时初始化。
 
 ### 知识数据看板
 
@@ -101,11 +117,23 @@ npm run dev
 
 | 页面 | 方法 | 接口 | 用途 |
 | --- | --- | --- | --- |
+| 登录 | `POST` | `/api/auth/login` | 用户名密码登录，返回 JWT 与权限标签 |
+| 登录 | `GET` | `/api/auth/me` | 恢复当前登录用户、角色与管理权限 |
+| 权限管理 | `GET` | `/api/roles` | 列出全部角色（管理员） |
+| 权限管理 | `POST` | `/api/roles` | 创建角色与权限标签（管理员） |
+| 权限管理 | `PATCH` | `/api/roles/{id}` | 更新角色描述/权限标签（管理员） |
+| 权限管理 | `DELETE` | `/api/roles/{id}` | 删除自定义角色（管理员） |
+| 权限管理 | `GET` | `/api/users` | 分页列出用户（管理员） |
+| 权限管理 | `POST` | `/api/users` | 创建用户并分配角色（管理员） |
+| 权限管理 | `PATCH` | `/api/users/{id}` | 修改昵称、状态、密码（管理员） |
+| 权限管理 | `PUT` | `/api/users/{id}/roles` | 全量替换用户角色（管理员） |
+| 权限管理 | `DELETE` | `/api/users/{id}` | 删除用户（管理员，不能删除自己） |
 | 文档库 | `GET` | `/api/documents` | 分页、按状态筛选文档 |
 | 文档库 | `POST` | `/api/documents` | 上传文档（multipart/form-data） |
 | 文档库 | `PATCH` | `/api/documents/{id}` | 重命名文档（body: `{"name": "新名称.ext"}`） |
+| 文档库 | `PATCH` | `/api/documents/{id}/permission-tags` | 修改文档可见范围标签（管理员） |
 | 文档库 | `GET` | `/api/documents/{id}/thumbnail` | 首页缩略图（WebP） |
-| 文档库 | `PUT` | `/api/documents/{id}/thumbnail` | 上传/替换缩略图（multipart/form-data） |
+| 文档库 | `PUT` | `/api/documents/{id}/thumbnail` | 上传/替换缩略图（管理员，multipart/form-data） |
 | 文档详情 | `GET` | `/api/documents/{id}` | 文档详情与状态轮询 |
 | 文档详情 | `DELETE` | `/api/documents/{id}` | 删除文档 |
 | 文档详情 | `POST` | `/api/documents/{id}/retry` | 重试失败文档 |
@@ -126,6 +154,8 @@ npm run dev
 | 评测中心 | `GET` | `/api/evaluations/items/{id}` | 单条 case 详情 |
 | 评测中心 | `PATCH` | `/api/evaluations/items/{id}` | 人工覆盖 Bad Case 归因与备注 |
 | 系统状态 | `GET` | `/api/health`、`/api/health/db`、`/api/health/cos` | 依赖健康检查 |
+
+> 除登录、健康检查和文档缩略图外，业务接口都需要 `Authorization: Bearer <token>`。文档原始文件为兼容 iframe / 新窗口预览，也支持 `?token=<JWT>`。
 
 ## 同步后端类型
 

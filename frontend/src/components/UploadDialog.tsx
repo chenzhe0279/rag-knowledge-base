@@ -24,6 +24,7 @@ export function UploadDialog({ onClose, onUploaded }: UploadDialogProps) {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [permissionInput, setPermissionInput] = useState('')
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -73,7 +74,15 @@ export function UploadDialog({ onClose, onUploaded }: UploadDialogProps) {
     setError(null)
 
     try {
-      const uploaded = await uploadDocument(file)
+      const permissionTags = Array.from(
+        new Set(
+          permissionInput
+            .split(/[,，\s]+/)
+            .map((tag) => tag.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      )
+      const uploaded = await uploadDocument(file, permissionTags)
       onUploaded(uploaded)
     } catch (uploadError) {
       setError(
@@ -179,6 +188,19 @@ export function UploadDialog({ onClose, onUploaded }: UploadDialogProps) {
               </span>
             </div>
           )}
+        </label>
+
+        <label className="upload-permission">
+          <span>文档可见范围</span>
+          <input
+            value={permissionInput}
+            onChange={(event) => setPermissionInput(event.target.value)}
+            disabled={uploading}
+            placeholder="留空 = 公开；多个标签用逗号分隔，例如 hr, finance"
+          />
+          <small>
+            只有拥有任一标签的角色才能看到这份文档；管理员始终可见。
+          </small>
         </label>
 
         {error ? (

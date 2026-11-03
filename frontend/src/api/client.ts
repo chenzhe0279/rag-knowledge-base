@@ -1,5 +1,6 @@
 import createClient from 'openapi-fetch'
 import { API_BASE_URL } from '../config'
+import { getAuthToken, notifyAuthExpired } from '../lib/authSession'
 import type { paths } from '../types/schema'
 
 /**
@@ -8,4 +9,20 @@ import type { paths } from '../types/schema'
  */
 export const apiClient = createClient<paths>({
   baseUrl: API_BASE_URL,
+})
+
+apiClient.use({
+  onRequest({ request }) {
+    const token = getAuthToken()
+    if (token) {
+      request.headers.set('Authorization', `Bearer ${token}`)
+    }
+    return request
+  },
+  onResponse({ response }) {
+    if (response.status === 401) {
+      notifyAuthExpired()
+    }
+    return response
+  },
 })

@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import { API_BASE_URL } from '../config'
+import { authFetch, getAuthToken } from '../lib/authSession'
 import type {
   DocumentChunkDetail,
   DocumentChunkListResponse,
@@ -199,8 +200,14 @@ export function getDocumentFileUrl(
   documentId: string,
   options: { download?: boolean } = {},
 ): string {
-  const download = options.download ? 1 : 0
-  return `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/file?download=${download}`
+  const search = new URLSearchParams({
+    download: options.download ? '1' : '0',
+  })
+  const token = getAuthToken()
+  if (token) {
+    search.set('token', token)
+  }
+  return `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/file?${search.toString()}`
 }
 
 /** 文档首页缩略图地址；cacheKey 用于文档更新后绕过浏览器缓存。 */
@@ -226,7 +233,7 @@ export async function fetchMarkdownText(documentId: string): Promise<string> {
   let response: Response
 
   try {
-    response = await fetch(getDocumentFileUrl(documentId), {
+    response = await authFetch(getDocumentFileUrl(documentId), {
       headers: { Accept: 'text/markdown, text/plain;q=0.9, */*;q=0.8' },
       cache: 'no-store',
     })
@@ -253,7 +260,7 @@ export async function renameDocument(
   let response: Response
 
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}`,
       {
         method: 'PATCH',
@@ -299,7 +306,7 @@ export async function uploadDocumentThumbnail(
 
   let response: Response
   try {
-    response = await fetch(
+    response = await authFetch(
       `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/thumbnail`,
       {
         method: 'PUT',
@@ -331,13 +338,19 @@ export async function uploadDocumentThumbnail(
   return payload as DocumentRead
 }
 
-export async function uploadDocument(file: File): Promise<DocumentRead> {
+export async function uploadDocument(
+  file: File,
+  permissionTags: string[] = [],
+): Promise<DocumentRead> {
   const formData = new FormData()
   formData.append('file', file)
+  if (permissionTags.length > 0) {
+    formData.append('permission_tags', JSON.stringify(permissionTags))
+  }
 
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}/api/documents`, {
+    response = await authFetch(`${API_BASE_URL}/api/documents`, {
       method: 'POST',
       headers: { Accept: 'application/json' },
       body: formData,
@@ -361,6 +374,49 @@ export async function uploadDocument(file: File): Promise<DocumentRead> {
     typeof (payload as DocumentRead).id !== 'string'
   ) {
     throw new DocumentsApiError('上传接口返回的数据结构不符合预期')
+  }
+
+  return payload as DocumentRead
+}
+
+/** 管理员修改文档可见性标签；空数组表示公开。 */
+export async function updateDocumentPermissionTags(
+  documentId: string,
+  permissionTags: string[],
+): Promise<DocumentRead> {
+  let response: Response
+
+  try {
+    response = await authFetch(
+      `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}/permission-tags`,
+      {
+        method: 'PATCH',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ permission_tags: permissionTags }),
+      },
+    )
+  } catch {
+    throw new DocumentsApiError('无法连接后端服务，请确认服务已启动')
+  }
+
+  const payload: unknown = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new DocumentsApiError(
+      extractApiErrorMessage(payload, fallbackMessage(response.status)),
+      response.status,
+    )
+  }
+
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    typeof (payload as DocumentRead).id !== 'string'
+  ) {
+    throw new DocumentsApiError('权限更新接口返回的数据结构不符合预期')
   }
 
   return payload as DocumentRead

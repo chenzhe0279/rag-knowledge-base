@@ -28,6 +28,7 @@ interface DockItem {
 
 interface DashboardDockProps {
   hidden: boolean
+  showEvaluations: boolean
   onOverview: () => void
   onOpenModule: (module: 'trend' | 'insight') => void
   onNavigate: (view: 'documents' | 'chat' | 'evaluations') => void
@@ -108,12 +109,16 @@ function DockButton({
  */
 export function DashboardDock({
   hidden,
+  showEvaluations,
   onOverview,
   onOpenModule,
   onNavigate,
 }: DashboardDockProps) {
   const mouseX = useMotionValue(Number.POSITIVE_INFINITY)
   const reduceMotion = useReducedMotion() === true
+  const visibleItems = DOCK_ITEMS.filter(
+    (item) => item.id !== 'evaluations' || showEvaluations,
+  )
 
   const runAction = (id: string) => {
     if (id === 'overview') {
@@ -156,7 +161,7 @@ export function DashboardDock({
         onPointerLeave={() => mouseX.set(Number.POSITIVE_INFINITY)}
       >
         <span className="dashboard-dock__sheen" aria-hidden="true" />
-        {DOCK_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <DockButton
             key={item.id}
             item={item}

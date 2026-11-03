@@ -22,10 +22,14 @@ import type { DocumentRead, DocumentStatus } from '../types/documents'
 import './DocumentsPage.css'
 
 interface DocumentsPageProps {
+  isAdmin: boolean
   onOpenDocument: (documentId: string) => void
 }
 
-export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
+export function DocumentsPage({
+  isAdmin,
+  onOpenDocument,
+}: DocumentsPageProps) {
   const {
     documents,
     total,
@@ -75,14 +79,16 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
                 : '当前页处理状态稳定'}
             </small>
           </div>
-          <button
-            type="button"
-            className="button button--primary library-upload-button"
-            onClick={() => setUploadOpen(true)}
-          >
-            <UploadIcon className="icon" />
-            上传文档
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              className="button button--primary library-upload-button"
+              onClick={() => setUploadOpen(true)}
+            >
+              <UploadIcon className="icon" />
+              上传文档
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -172,7 +178,7 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
                 >
                   清除筛选
                 </button>
-              ) : (
+              ) : isAdmin ? (
                 <button
                   type="button"
                   className="button button--primary"
@@ -181,6 +187,10 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
                   <UploadIcon className="icon" />
                   上传第一份文档
                 </button>
+              ) : (
+                <p className="library-empty__hint">
+                  当前账号还没有可见文档，请联系管理员分配文档权限。
+                </p>
               )}
             </div>
           )
@@ -239,14 +249,16 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
                         {formatDateTime(document.updated_at)}
                       </span>
                       <div className="knowledge-card__actions">
-                        <button
-                          type="button"
-                          className="card-action"
-                          onClick={() => setRenameTarget(document)}
-                        >
-                          <PencilIcon className="icon" />
-                          重命名
-                        </button>
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            className="card-action"
+                            onClick={() => setRenameTarget(document)}
+                          >
+                            <PencilIcon className="icon" />
+                            重命名
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="card-action card-action--open"
@@ -289,7 +301,7 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
         ) : null}
       </section>
 
-      {uploadOpen ? (
+      {uploadOpen && isAdmin ? (
         <UploadDialog
           onClose={() => setUploadOpen(false)}
           onUploaded={(document) => {
@@ -299,7 +311,7 @@ export function DocumentsPage({ onOpenDocument }: DocumentsPageProps) {
         />
       ) : null}
 
-      {renameTarget ? (
+      {renameTarget && isAdmin ? (
         <RenameDocumentDialog
           document={renameTarget}
           onClose={() => setRenameTarget(null)}

@@ -7,8 +7,16 @@ import {
   FileTextIcon,
   ServerIcon,
 } from './components/Icons'
+import { AccountMenu } from './components/AccountMenu'
 import { Spinner } from './components/Spinner'
 import { DashboardPage } from './dashboard/DashboardPage'
+import { getMe } from './api/auth'
+import {
+  AUTH_EXPIRED_EVENT,
+  clearAuthToken,
+  getAuthToken,
+} from './lib/authSession'
+import type { LoginResponse, MeResponse } from './types/auth'
 import './App.css'
 import './theme.css'
 
@@ -30,23 +38,113 @@ const EvaluationPage = lazy(() =>
     default: module.EvaluationPage,
   })),
 )
+const AdminPage = lazy(() =>
+  import('./pages/AdminPage').then((module) => ({
+    default: module.AdminPage,
+  })),
+)
+const LoginPage = lazy(() =>
+  import('./pages/LoginPage').then((module) => ({
+    default: module.LoginPage,
+  })),
+)
 const SystemStatusPage = lazy(() =>
   import('./pages/SystemStatusPage').then((module) => ({
     default: module.SystemStatusPage,
   })),
 )
 
-type AppView = 'dashboard' | 'documents' | 'chat' | 'evaluations' | 'status'
+type AppView =
+  | 'dashboard'
+  | 'documents'
+  | 'chat'
+  | 'evaluations'
+  | 'admin'
+  | 'status'
+
+function authErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : '登录状态校验失败'
+}
 
 function App() {
   const [view, setView] = useState<AppView>('dashboard')
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     null,
   )
+  const [session, setSession] = useState<MeResponse | null>(null)
+  const [authChecking, setAuthChecking] = useState(() =>
+    Boolean(getAuthToken()),
+  )
+  const [authError, setAuthError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!getAuthToken()) {
+      return
+    }
+
+    let active = true
+
+    getMe()
+      .then((me) => {
+        if (active) {
+          setSession(me)
+          setAuthError(null)
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) {
+          return
+        }
+        clearAuthToken()
+        setSession(null)
+        setAuthError(authErrorMessage(error))
+      })
+      .finally(() => {
+        if (active) {
+          setAuthChecking(false)
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleExpired = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail
+      setSession(null)
+      setAuthError(detail?.message ?? '登录已过期，请重新登录')
+      setView('dashboard')
+      setSelectedDocumentId(null)
+    }
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleExpired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleExpired)
+  }, [])
 
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [view, selectedDocumentId])
+
+  const handleLoggedIn = (loginSession: LoginResponse) => {
+    setSession({
+      user: loginSession.user,
+      permission_tags: loginSession.permission_tags,
+      is_admin: loginSession.is_admin,
+    })
+    setAuthError(null)
+    setView('dashboard')
+    setSelectedDocumentId(null)
+  }
+
+  const handleLogout = () => {
+    clearAuthToken()
+    setSession(null)
+    setAuthError(null)
+    setView('dashboard')
+    setSelectedDocumentId(null)
+  }
 
   const showDashboard = () => {
     setView('dashboard')
@@ -64,7 +162,18 @@ function App() {
   }
 
   const showEvaluations = () => {
+    if (!session?.is_admin) {
+      return
+    }
     setView('evaluations')
+    setSelectedDocumentId(null)
+  }
+
+  const showAdmin = () => {
+    if (!session?.is_admin) {
+      return
+    }
+    setView('admin')
     setSelectedDocumentId(null)
   }
 
@@ -78,14 +187,59 @@ function App() {
     setSelectedDocumentId(documentId)
   }
 
+  if (authChecking) {
+    return (
+      <div className="auth-boot" role="status">
+        <span className="auth-boot__mark">
+          <BrandIcon />
+        </span>
+        <Spinner label="正在校验登录状态" />
+        <span>正在恢复安全会话…</span>
+      </div>
+    )
+  }
+
+  if (!session) {
+    return (
+      <Suspense
+        fallback={
+          <div className="auth-boot">
+            <Spinner label="正在加载登录页" />
+          </div>
+        }
+      >
+        <LoginPage
+          initialError={authError}
+          onLoggedIn={handleLoggedIn}
+        />
+      </Suspense>
+    )
+  }
+
   if (view === 'dashboard') {
     return (
-      <DashboardPage
-        onNavigate={(destination) => {
-          setSelectedDocumentId(null)
-          setView(destination)
-        }}
-      />
+      <Suspense
+        fallback={
+          <div className="app-view-loading" role="status">
+            <Spinner label="正在加载看板" />
+          </div>
+        }
+      >
+        <DashboardPage
+          account={
+            <AccountMenu
+              session={session}
+              onManageUsers={showAdmin}
+              onLogout={handleLogout}
+            />
+          }
+          showEvaluations={session.is_admin}
+          onNavigate={(destination) => {
+            setSelectedDocumentId(null)
+            setView(destination)
+          }}
+        />
+      </Suspense>
     )
   }
 
@@ -138,18 +292,20 @@ function App() {
             <ChatIcon className="icon" />
             知识问答
           </button>
-          <button
-            type="button"
-            className={
-              view === 'evaluations'
-                ? 'main-nav__item is-active'
-                : 'main-nav__item'
-            }
-            onClick={showEvaluations}
-          >
-            <EvaluationIcon className="icon" />
-            评测中心
-          </button>
+          {session.is_admin ? (
+            <button
+              type="button"
+              className={
+                view === 'evaluations'
+                  ? 'main-nav__item is-active'
+                  : 'main-nav__item'
+              }
+              onClick={showEvaluations}
+            >
+              <EvaluationIcon className="icon" />
+              评测中心
+            </button>
+          ) : null}
           <button
             type="button"
             className={
@@ -166,6 +322,12 @@ function App() {
           <span className="environment__dot" aria-hidden="true" />
           本地开发环境
         </span>
+
+        <AccountMenu
+          session={session}
+          onManageUsers={showAdmin}
+          onLogout={handleLogout}
+        />
       </header>
 
       <Suspense
@@ -179,24 +341,30 @@ function App() {
         {selectedDocumentId ? (
           <DocumentDetailPage
             documentId={selectedDocumentId}
+            isAdmin={session.is_admin}
             onBack={showDocuments}
             onDeleted={showDocuments}
           />
         ) : view === 'chat' ? (
           <ChatPage onOpenDocument={openDocumentFromChat} />
-        ) : view === 'evaluations' ? (
+        ) : view === 'evaluations' && session.is_admin ? (
           <EvaluationPage />
+        ) : view === 'admin' && session.is_admin ? (
+          <AdminPage session={session} />
         ) : view === 'status' ? (
           <SystemStatusPage />
         ) : (
-          <DocumentsPage onOpenDocument={setSelectedDocumentId} />
+          <DocumentsPage
+            isAdmin={session.is_admin}
+            onOpenDocument={setSelectedDocumentId}
+          />
         )}
       </Suspense>
 
       <footer className="page-footer">
         <p>RAG Knowledge Base · React + TypeScript + Vite</p>
         <p>
-          SSE 流式问答 · 类型由 <code>npm run gen:api</code> 从后端 OpenAPI 同步
+          JWT + RBAC · 权限在每次请求时由后端实时校验
         </p>
       </footer>
     </div>
@@ -204,4 +372,3 @@ function App() {
 }
 
 export default App
-

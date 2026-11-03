@@ -120,7 +120,9 @@ class UserService:
 
         # 提交更改
         await self.session.commit()
-        # 刷新角色的关联数据
+        # commit 会 expire 所有列属性；这里先整体 refresh 重新加载 updated_at 等列，
+        # 再单独刷新 roles，避免 Pydantic 在同步序列化时触发异步懒加载。
+        await self.session.refresh(user)
         await self.session.refresh(user, attribute_names=["roles"])
         return user
 

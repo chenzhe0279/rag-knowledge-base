@@ -611,6 +611,52 @@
   line-height: 1.7;
 }
 
+.upload-permission {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 16px 26px 0;
+}
+
+.upload-permission > span {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.upload-permission input {
+  width: 100%;
+  padding: 9px 11px;
+  color: var(--text-strong);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: none;
+}
+
+.upload-permission input:focus {
+  border-color: rgba(182, 109, 68, 0.42);
+  box-shadow: 0 0 0 3px rgba(182, 109, 68, 0.08);
+}
+
+.upload-permission small {
+  color: var(--text-faint);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.library-empty__hint {
+  max-width: 320px;
+  margin: 8px auto 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.65;
+  text-align: center;
+}
+
 .dropzone {
   display: block;
   margin: 0 26px;

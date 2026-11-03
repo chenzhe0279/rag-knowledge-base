@@ -8,8 +8,10 @@ import {
   LayersIcon,
   PencilIcon,
   RefreshIcon,
+  ShieldCheckIcon,
   TrashIcon,
 } from '../components/Icons'
+import { DocumentPermissionDialog } from '../components/DocumentPermissionDialog'
 import { DocumentPreview } from '../components/DocumentPreview'
 import { FileTypeTile } from '../components/FileTypeTile'
 import { Modal } from '../components/Modal'
@@ -41,6 +43,7 @@ import './DocumentDetailPage.css'
 
 interface DocumentDetailPageProps {
   documentId: string
+  isAdmin: boolean
   onBack: () => void
   onDeleted: () => void
 }
@@ -49,6 +52,7 @@ type DetailTab = 'preview' | 'chunks'
 
 export function DocumentDetailPage({
   documentId,
+  isAdmin,
   onBack,
   onDeleted,
 }: DocumentDetailPageProps) {
@@ -58,6 +62,7 @@ export function DocumentDetailPage({
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
+  const [permissionOpen, setPermissionOpen] = useState(false)
 
   const handleRetry = async () => {
     if (!document) {
@@ -135,15 +140,27 @@ export function DocumentDetailPage({
             <DownloadIcon className="icon" />
             下载
           </a>
-          <button
-            type="button"
-            className="button button--ghost button--sm"
-            onClick={() => setRenameOpen(true)}
-          >
-            <PencilIcon className="icon" />
-            重命名
-          </button>
-          {document.status === 'failed' ? (
+          {isAdmin ? (
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => setPermissionOpen(true)}
+            >
+              <ShieldCheckIcon className="icon" />
+              可见范围
+            </button>
+          ) : null}
+          {isAdmin ? (
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={() => setRenameOpen(true)}
+            >
+              <PencilIcon className="icon" />
+              重命名
+            </button>
+          ) : null}
+          {isAdmin && document.status === 'failed' ? (
             <button
               type="button"
               className="button button--ghost button--sm"
@@ -156,20 +173,24 @@ export function DocumentDetailPage({
               重新处理
             </button>
           ) : null}
-          <button
-            type="button"
-            className="button button--danger-ghost button--sm"
-            onClick={() => setDeleteOpen(true)}
-            disabled={document.status === 'parsing' || document.status === 'indexing'}
-            title={
-              document.status === 'parsing' || document.status === 'indexing'
-                ? '文档处理中，暂时不能删除'
-                : undefined
-            }
-          >
-            <TrashIcon className="icon" />
-            删除
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              className="button button--danger-ghost button--sm"
+              onClick={() => setDeleteOpen(true)}
+              disabled={
+                document.status === 'parsing' || document.status === 'indexing'
+              }
+              title={
+                document.status === 'parsing' || document.status === 'indexing'
+                  ? '文档处理中，暂时不能删除'
+                  : undefined
+              }
+            >
+              <TrashIcon className="icon" />
+              删除
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -207,6 +228,22 @@ export function DocumentDetailPage({
               <code title={document.file_hash}>
                 {document.file_hash.slice(0, 12)}…
               </code>
+            </dd>
+          </div>
+          <div>
+            <dt>可见范围</dt>
+            <dd className="detail-permission-tags">
+              {(document.permission_tags ?? []).length === 0 ? (
+                <span className="detail-permission-tag detail-permission-tag--public">
+                  公开
+                </span>
+              ) : (
+                document.permission_tags?.map((tag) => (
+                  <span className="detail-permission-tag" key={tag}>
+                    {tag}
+                  </span>
+                ))
+              )}
             </dd>
           </div>
         </dl>
@@ -250,17 +287,19 @@ export function DocumentDetailPage({
             <strong>文档处理失败</strong>
             <p>{document.error_message ?? '后端没有返回具体错误信息。'}</p>
           </div>
-          <button
-            type="button"
-            className="button button--ghost button--sm"
-            onClick={handleRetry}
-            disabled={retrying}
-          >
-            <RefreshIcon
-              className={retrying ? 'icon icon--spinning' : 'icon'}
-            />
-            重新处理
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              className="button button--ghost button--sm"
+              onClick={handleRetry}
+              disabled={retrying}
+            >
+              <RefreshIcon
+                className={retrying ? 'icon icon--spinning' : 'icon'}
+              />
+              重新处理
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -311,7 +350,7 @@ export function DocumentDetailPage({
         </section>
       )}
 
-      {deleteOpen ? (
+      {deleteOpen && isAdmin ? (
         <DeleteDocumentDialog
           document={document}
           onClose={() => setDeleteOpen(false)}
@@ -319,7 +358,7 @@ export function DocumentDetailPage({
         />
       ) : null}
 
-      {renameOpen ? (
+      {renameOpen && isAdmin ? (
         <RenameDocumentDialog
           document={document}
           onClose={() => setRenameOpen(false)}
@@ -328,6 +367,17 @@ export function DocumentDetailPage({
             refresh()
           }}
           onDocumentUpdated={() => {
+            refresh()
+          }}
+        />
+      ) : null}
+
+      {permissionOpen && isAdmin ? (
+        <DocumentPermissionDialog
+          document={document}
+          onClose={() => setPermissionOpen(false)}
+          onSaved={() => {
+            setPermissionOpen(false)
             refresh()
           }}
         />

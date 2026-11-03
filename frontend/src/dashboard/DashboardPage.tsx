@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import type { ReactNode } from 'react'
 import {
   LayoutGroup,
   MotionConfig,
@@ -40,6 +41,8 @@ export type DashboardDestination =
   | 'status'
 
 interface DashboardPageProps {
+  account: ReactNode
+  showEvaluations: boolean
   onNavigate: (view: DashboardDestination) => void
 }
 
@@ -143,7 +146,11 @@ function HealthOrb({ data }: { data: PeriodData }) {
   )
 }
 
-export function DashboardPage({ onNavigate }: DashboardPageProps) {
+export function DashboardPage({
+  account,
+  showEvaluations,
+  onNavigate,
+}: DashboardPageProps) {
   const [period, setPeriod] = useState<PeriodKey>(DEFAULT_PERIOD)
   const [activeView, setActiveView] = useState<DashboardView>('overview')
   const [activeModule, setActiveModule] = useState<ModuleKey | null>(null)
@@ -312,10 +319,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
                   value={period}
                   onChange={handlePeriodChange}
                 />
-                <span className="dash-avatar" aria-label="林夏的账户">
-                  林
-                  <i aria-hidden="true" />
-                </span>
+                {account}
               </div>
             </header>
 
@@ -459,6 +463,7 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
 
           <DashboardDock
             hidden={isDetailOpen}
+            showEvaluations={showEvaluations}
             onOverview={handleOverview}
             onOpenModule={handleDockModule}
             onNavigate={onNavigate}
