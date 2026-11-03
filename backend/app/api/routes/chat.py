@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import EventSourceResponse
 from fastapi.sse import ServerSentEvent
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, CurrentUser
 from app.api.schemas.chat import (
     ChatRequest,
     ConversationCreate,
@@ -29,11 +29,11 @@ router = APIRouter(prefix="/conversations", tags=["chat"])
 # 注册 POST 请求路由，用于创建一个新会话
 @router.post("", response_model=ConversationRead, status_code=201, operation_id="createConversation",)
 # 定义异步处理函数，接收请求体和数据库会话
-async def create_conversation(payload: ConversationCreate, session: DbSession,) -> ConversationRead:
+async def create_conversation(user: CurrentUser, payload: ConversationCreate, session: DbSession,) -> ConversationRead:
     # 实例化业务服务层，将数据库会话注入进去
     service = ChatService(session)
     # 调用服务层方法创建会话，传入校验过后的标题
-    conversation = await service.create_conversation(title=payload.title)
+    conversation = await service.create_conversation(title=payload.title,current_user=user)
     # 将数据库 ORM 对象转换为 Pydantic 响应模型，自动返回 JSON 给前端
     return ConversationRead.model_validate(conversation)
 
@@ -41,12 +41,13 @@ async def create_conversation(payload: ConversationCreate, session: DbSession,) 
 # 注册 GET 请求路由，用于获取指定会话的详情
 @router.get("/{conversation_id}", response_model=ConversationDetail, operation_id="getConversation",)
 # 定义异步处理函数
-async def get_conversation(conversation_id: UUID, session: DbSession,) -> ConversationDetail:
+async def get_conversation(conversation_id: UUID, user: CurrentUser, session: DbSession,) -> ConversationDetail:
     """返回会话本身 + 全部历史消息（含引用）。"""
     # 实例化业务服务层
     service = ChatService(session)
     # 调用服务层方法，获取会话实体和该会话下的所有历史消息（返回一个元组）
-    conversation, messages = await service.list_messages(conversation_id)
+    # 传入 current_user=user：服务层会用它校验会话归属，别人的会话直接 404
+    conversation, messages = await service.list_messages(conversation_id, current_user=user)
     # 构造嵌套的响应模型并返回
     return ConversationDetail(
         # 将会话 ORM 对象转为 Pydantic 模型
@@ -61,7 +62,7 @@ async def get_conversation(conversation_id: UUID, session: DbSession,) -> Conver
     # 指定响应类为 EventSourceResponse，告诉 FastAPI 这是一个 SSE（Server-Sent Events）流式响应
     response_class=EventSourceResponse,
 )
-async def stream_chat(conversation_id: UUID, payload: ChatRequest, session: DbSession,) -> AsyncIterable[ServerSentEvent]:
+async def stream_chat(conversation_id: UUID, payload: ChatRequest, user: CurrentUser, session: DbSession,) -> AsyncIterable[ServerSentEvent]:
     """SSE 流式问答。
 
     事件协议：message_start -> citations -> token...（多次） -> message_end；
@@ -78,7 +79,10 @@ async def stream_chat(conversation_id: UUID, payload: ChatRequest, session: DbSe
         filters = None
     # 调用服务层的异步生成器 stream_answer。
     # 它会依次产生 message_start、citations、token 和 message_end 等事件。
-    async for sse_event in service.stream_answer(conversation_id, payload.question, filters=filters):
+    # 传入 current_user=user：用于校验会话归属 + 计算检索权限标签
+    async for sse_event in service.stream_answer(
+        conversation_id, payload.question, filters=filters, current_user=user
+    ):
         # 将服务层产出的字典数据，包装成 FastAPI 标准的 SSE 事件对象并推送给前端
         yield ServerSentEvent(
             # 事件携带的数据载荷（通常是 JSON 序列化后的字符串或字典）
@@ -90,14 +94,15 @@ async def stream_chat(conversation_id: UUID, payload: ChatRequest, session: DbSe
 
 # 获取会话列表（分页）
 @router.get("",  response_model=ConversationPage,  operation_id="listConversations",  summary="按更新时间倒序分页列出所有会话",)
-async def list_conversations(session: DbSession, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),) -> ConversationPage:
+async def list_conversations(session: DbSession, user: CurrentUser, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),) -> ConversationPage:
     """获取当前用户的所有会话记录（侧边栏列表）。"""
     # 1. 实例化服务层对象，将数据库 session 传入
     service = ChatService(session)
 
     # 2. 调用服务层的方法，获取当前页的会话及消息数，以及总记录数
     # items 的数据结构通常是 list[tuple[Conversation, int]]
-    items, total = await service.list_conversations(page=page, page_size=page_size)
+    # 传入 current_user=user：只返回当前登录用户自己的会话
+    items, total = await service.list_conversations(page=page, page_size=page_size, current_user=user)
 
     # 3. 组装并返回分页响应模型
     return ConversationPage(
@@ -119,14 +124,15 @@ async def list_conversations(session: DbSession, page: int = Query(1, ge=1), pag
 
 # 删除指定会话
 @router.delete("/{conversation_id}",  status_code=204, operation_id="deleteConversation",)
-async def delete_conversation(conversation_id: UUID,  session: DbSession, ) -> Response:
+async def delete_conversation(conversation_id: UUID, user: CurrentUser, session: DbSession, ) -> Response:
     """删除指定的会话（硬删除）。"""
     # 1. 实例化服务层对象
     service = ChatService(session)
 
     # 2. 调用服务层删除方法。
     # 注意：底层如果找不到该会话，会抛出 NotFoundError，FastAPI 会自动将其转化为 404 响应。
-    await service.delete_conversation(conversation_id)
+    # 传入 current_user=user：只能删除自己的会话，别人的会话同样按“不存在”处理
+    await service.delete_conversation(conversation_id, current_user=user)
 
     # 3. 成功删除后，返回空的 204 响应
     return Response(status_code=204)

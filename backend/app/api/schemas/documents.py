@@ -27,8 +27,18 @@ class DocumentRead(BaseModel):
     thumbnail_url: str | None = None  # 缩略图地址；没有则为 None
     status: DocumentStatusValue  # 当前处理状态（强类型约束）
     error_message: str | None = None  # 错误信息（可选，默认为 None）
+    # 空数组视为"公开"；非空数组与用户有效权限标签做重叠匹配
+    permission_tags: list[str] = Field(default_factory=list)
+    # 上传者 user_id；用户被硬删后置 None
+    created_by: UUID | None = None
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
+
+class DocumentPermissionTagsUpdate(BaseModel):
+    """admin 改文档可见性标签的请求体。"""
+
+    permission_tags: list[str] = Field(default_factory=list)
+
 
 
 class DocumentListResponse(BaseModel):

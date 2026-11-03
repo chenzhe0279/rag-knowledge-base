@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import PurePath
+from typing import Sequence
 from uuid import UUID
 
 from fastapi import BackgroundTasks, UploadFile
@@ -15,6 +16,7 @@ from app.db.repositories.chunk_repo import (
 )
 from app.db.repositories.document_repo import DocumentRepository
 from app.ingestion.pipeline import ingest_document
+from app.services.role_service import _normalize_tags
 from app.storage.file_service import FileService, get_file_service
 import asyncio
 from app.ingestion.thumbnail import generate_manual_thumbnail
@@ -112,7 +114,8 @@ class DocumentService:
         # 依赖注入：如果外部传了就用外部的，否则用默认的
         self.file_service = file_service or get_file_service()
 
-    async def upload(self, file: UploadFile, background_tasks: BackgroundTasks) -> Document:
+    async def upload(self, file: UploadFile, background_tasks: BackgroundTasks,
+                     *, created_by: UUID | None = None, permission_tags: Sequence[str] | None = None,) -> Document:
         """
         处理文档上传的核心业务逻辑。
         """
@@ -167,6 +170,8 @@ class DocumentService:
             cos_object_key=object_key,  # 在云存储中的具体路径（Key）
             cos_region=self.file_service.region,  # 存储桶所在地域
             status=DocumentStatus.UPLOADING,  # 初始状态设为“上传中”
+            permission_tags=_normalize_tags(permission_tags),
+            created_by=created_by,
         )
 
         # 2. 将对象加入当前 SQLAlchemy 的 session 会话中（此时还在内存，没有落库）
@@ -189,13 +194,41 @@ class DocumentService:
         # 6. 将生成的文档信息返回给前端（此时状态为 UPLOADING，前端可以凭 ID 轮询状态）
         return document
 
-    async def get(self, document_id: UUID) -> Document:
+    # =====================================================================
+    # 方法作用：更新指定文档的可见性权限标签（通常仅管理员可用）。
+    # 核心逻辑：查出文档 -> 校验存在性 -> 清洗新标签 -> 赋值并提交入库。
+    # =====================================================================
+    async def update_permission_tags(self, document_id: UUID, tags: Sequence[str]) -> Document:
+        """admin 修改文档可见性标签。"""
+
+        # 1. 根据文档 ID 去数据库查询对应的文档对象
+        doc = await self.repo.get_by_id(document_id)
+
+        # 2. 防御性校验：如果数据库里没找到这个文档，直接抛出 404 业务异常
+        if doc is None:
+            raise NotFoundError("文档不存在")
+
+        # 3. 【核心修改】将前端传来的标签列表传入 _normalize_tags 进行清洗（去重、去空格），并重新赋值给文档对象
+        doc.permission_tags = _normalize_tags(tags)
+
+        # 4. 提交数据库事务，将修改真正持久化落盘
+        await self.session.commit()
+
+        # 5. 刷新实体：因为刚刚修改了数据，重新读取一遍数据库，确保返回给前端的对象状态是最新的
+        await self.session.refresh(doc)
+
+        # 6. 返回更新后的文档对象
+        return doc
+
+
+
+    async def get(self, document_id: UUID, *, permission_tags: list[str] | None = None) -> Document:
         """
         根据文档 ID 获取单个文档。
         如果文档不存在，则抛出业务异常。
         """
         # 调用仓储层（Repository）去数据库查询
-        doc = await self.repo.get_by_id(document_id)
+        doc = await self.repo.get_by_id(document_id, permission_tags=permission_tags)
 
         # 如果查不到，说明数据不存在或已被删除，抛出 404 业务异常
         if doc is None:
@@ -204,7 +237,7 @@ class DocumentService:
         # 查到则正常返回 Document 对象
         return doc
 
-    async def list_documents(self, page: int, page_size: int, *, status: DocumentStatus | None = None,) -> tuple[list[Document], int]:
+    async def list_documents(self, page: int, page_size: int, *, status: DocumentStatus | None = None, permission_tags: list[str] | None = None) -> tuple[list[Document], int]:
         """
         分页获取文档列表。
 
@@ -215,7 +248,7 @@ class DocumentService:
         """
         # 直接透传给仓储层的分页查询方法。
         # 服务层（Service）在这里主要负责编排，具体的分页 SQL 逻辑由仓储层处理。
-        return await self.repo.list_paginated(page, page_size, status=status)
+        return await self.repo.list_paginated(page, page_size, status=status, permission_tags=permission_tags)
 
     async def delete(self, document_id: UUID) -> None:
         """删除文档。
@@ -295,7 +328,7 @@ class DocumentService:
         logger.info("document retry scheduled: id=%s", document_id)
         return doc
 
-    async def list_chunks(self, document_id: UUID, page: int, page_size: int) -> tuple[list[DocumentChunk], int, ChunkStats | None]:
+    async def list_chunks(self, document_id: UUID, page: int, page_size: int, *, permission_tags: list[str] | None = None) -> tuple[list[DocumentChunk], int, ChunkStats | None]:
         """
         分页获取指定文档下的文本块列表，并附带该文档的 chunk 统计信息。
 
@@ -305,7 +338,7 @@ class DocumentService:
         # 否则，如果前端传了一个不存在的 document_id，下面的查询会返回空列表 [] 和 0。
         # 前端无法区分到底是“该文档下没有 chunk”，还是“该文档根本不存在”。
         # 调用 self.get() 若找不到会直接抛出 NotFoundError，阻断后续查询。
-        await self.get(document_id)
+        await self.get(document_id, permission_tags=permission_tags)
 
         # 1. 分页查询当前页的 chunks 列表及总数
         items, total = await self.chunk_repo.list_paginated_by_document(
@@ -318,13 +351,15 @@ class DocumentService:
         # 3. 返回完整的业务数据
         return items, total, stats
 
-    async def get_chunk(self, document_id: UUID, chunk_id: UUID) -> DocumentChunk:
+    async def get_chunk(self, document_id: UUID, chunk_id: UUID, *, permission_tags: list[str] | None = None) -> DocumentChunk:
         """
         获取指定文档下的单个 chunk 详情。
 
         :param document_id: 文档 ID（用于权限归属校验）
         :param chunk_id: 文本块 ID
         """
+        # 双重校验:先确保用户能看到document，再校验chunk归属
+        await self.get(document_id, permission_tags=permission_tags)
         # 调用仓储层方法，使用 document_id + chunk_id 双条件查询。
         # 这样即使有人恶意猜测其他文档的 chunk_id，也会因为 document_id 不匹配而查不到（防止水平越权）。
         chunk = await self.chunk_repo.get_for_document(document_id, chunk_id)

@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from collections.abc import Sequence
 from uuid import UUID
-
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy import and_, or_
 from sqlalchemy import delete, func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -21,6 +22,43 @@ class ChunkStats:
     avg_length: int
     min_length: int
     max_length: int
+
+
+# 通配权限标签：admin 角色持有，含义"无视权限过滤"
+WILDCARD_PERMISSION_TAG = "*"
+
+
+# =====================================================================
+# 函数作用：动态构造文档可见性（权限控制）的 SQL WHERE 条件。
+# 返回的是 SQLAlchemy 的条件表达式对象，而不是具体的查询结果。
+# =====================================================================
+def _permission_where(permission_tags: list[str] | None) -> ColumnElement[bool] | None:
+    """构造文档可见性 WHERE 条件。
+
+    - None: 调用方（评测 / 启动期种子）显式不限制
+    - 含 "*": admin 通配，不加条件
+    - 其他: '空权限标签视为公开' OR '数组重叠'
+
+    返回 None 表示不附加任何额外 WHERE；非 None 时由调用方 .where() 拼上。
+    """
+    # 1. 如果传入的权限是 None（比如后台任务、评测脚本），直接返回 None，代表不限制任何权限
+    if permission_tags is None:
+        return None
+
+    # 2. 如果权限列表里包含通配符 "*"，说明是 admin，直接返回 None，不加权限过滤条件
+    if WILDCARD_PERMISSION_TAG in permission_tags:
+        return None
+
+    # 3. 普通用户：构造 OR 条件（满足以下任意一个即可见）
+    return or_(
+        # 条件 A：文档的权限标签为空数组（长度/基数为 0），意味着该文档是“公开”的
+        func.cardinality(Document.permission_tags) == 0,
+        # 条件 B：文档的权限标签，与用户的权限标签有交集（PostgreSQL 的 && 操作符）
+        # 比如文档是 ["hr", "finance"]，用户有 ["finance"]，就能匹配上
+        Document.permission_tags.op("&&")(permission_tags),
+    )
+
+
 
 
 class DocumentChunkRepository:
@@ -170,6 +208,8 @@ class DocumentChunkRepository:
             # 需要返回的候选文本块数量（Top-K）
             top_k: int,
             filters: RetrievalFilter | None = None,
+            *,
+            permission_tags: list[str] | None = None,
     ) -> list[tuple[DocumentChunk, float]]:
         """按 cosine 距离做 Top-K 向量检索。
 
@@ -180,18 +220,18 @@ class DocumentChunkRepository:
         """
 
         # 构建 pgvector 特有的 SQL 表达式：计算数据库中 embedding 列与查询向量之间的余弦距离
-        distance = DocumentChunk.embedding.cosine_distance(query_embedding)
+        distance_expr = DocumentChunk.embedding.cosine_distance(query_embedding)
 
         # 开始构建 SQLAlchemy 查询语句
         stmt = (
             # 选择 DocumentChunk 实体，同时将计算出的距离起个别名叫 "distance" 一起查出来
-            select(DocumentChunk, distance.label("distance"))
+            select(DocumentChunk, distance_expr.label("distance"))
             # 关联 Document 表（INNER JOIN），条件是 Document 的 id 等于 Chunk 的 document_id
             .join(Document, Document.id == DocumentChunk.document_id)
             # 过滤条件
-            .where(*_document_filter_conditions(filters))
+            .where(*_document_filter_conditions(filters,permission_tags=permission_tags))
             # 排序规则：按距离升序排列（距离越小，说明语义越相似，排在越前面）
-            .order_by(distance.asc())
+            .order_by(distance_expr.asc())
             # 限制只取前 K 条
             .limit(top_k)
             # 预加载优化：当你把这一堆 DocumentChunk 查出来之后，请顺着每个 Chunk 身上叫 document 的那个属性，把关联的 Document 数据也一并给我捞出来
@@ -213,7 +253,7 @@ class DocumentChunkRepository:
         return result
 
     # 定义异步方法：执行基于关键词的中文全文检索
-    async def keyword_search(self, ts_query: str, top_k: int,  filters: RetrievalFilter | None = None,) -> list[tuple[DocumentChunk, float]]:
+    async def keyword_search(self, ts_query: str, top_k: int,  filters: RetrievalFilter | None = None, *, permission_tags: list[str] | None = None) -> list[tuple[DocumentChunk, float]]:
         """中文全文检索 Top-K：websearch_to_tsquery + ts_rank。
 
         ts_query 是 tokenizer.build_tsquery() 生成的 OR 表达式，
@@ -247,7 +287,7 @@ class DocumentChunkRepository:
             # 过滤条件
             .where(
                 # 条件 A：只检索那些已经解析完成（ready）的文档，避免搜到半成品
-                *_document_filter_conditions(filters),
+                *_document_filter_conditions(filters, permission_tags=permission_tags),
                 # 条件 B：【核心匹配逻辑】使用 PostgreSQL 的 "@@" 操作符。
                 # 判断左边（文本向量 content_tsv）是否匹配右边（查询向量 tsquery）。
                 DocumentChunk.content_tsv.op("@@")(tsquery),
@@ -271,10 +311,20 @@ class DocumentChunkRepository:
 
 # 定义工具函数：根据前端传来的过滤条件，动态生成 SQLAlchemy 的 WHERE 查询子句列表。
 # 参数 filters：领域模型中的不可变过滤对象（可能为 None，表示用户没有选任何额外过滤条件）。
-def _document_filter_conditions(filters: RetrievalFilter | None) -> list:
-    # 1. 【强制基础条件】：默认只能检索“已经处理完成（ready）”的文档。
-    # 这是整个 RAG 系统的底线，防止那些正在解析中、或者解析失败的半成品文档被误搜出来。
-    conditions = [Document.status == "ready"]
+def _document_filter_conditions(filters: RetrievalFilter | None, *, permission_tags: list[str] | None = None) -> list:
+    # 声明一个列表 conditions，用于收集后续所有的 SQL WHERE 过滤条件。
+    # 初始条件：只查询状态为 "ready"（已就绪）的文档。
+    conditions: list[ColumnElement[bool]] = [
+        Document.status == "ready",
+    ]
+
+    # 如果用户是 admin（或者系统后台任务），它返回 None；
+    # 如果是普通用户，它返回一个 or_(...) 的数组重叠条件。
+    perm_where = _permission_where(permission_tags)
+
+    # 只有当 perm_where 不是 None 时（即普通用户需要权限过滤），才把它追加到条件列表中。
+    if perm_where is not None:
+        conditions.append(perm_where)
 
     # 2. 防御性判断：如果前端根本没有传额外过滤条件，直接把基础条件返回。
     if filters is None:
@@ -298,6 +348,7 @@ def _document_filter_conditions(filters: RetrievalFilter | None) -> list:
     # 如果用户只想在某几篇特定的文档中搜索，就会触发这个 IN 条件。
     if filters.document_ids:
         conditions.append(Document.id.in_(filters.document_ids))
+
 
     # 7. 返回组装好的条件列表。
     # 调用方通常会在后续使用：`select(...).where(*conditions)`，利用 Python 的 * 解包语法将所有条件用 AND 连接起来。

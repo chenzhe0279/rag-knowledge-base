@@ -18,6 +18,11 @@ class RAGState(TypedDict, total=False):
     # 用户当前提出的问题
     question: str
 
+    # 用户有效权限标签，由 service 在进图前注入
+    # 含 "*" 时检索 SQL 不附加权限过滤（admin 视角）；
+    # 评测路径传 ["*"] 让评测不被权限拦住
+    permissions: list[str]
+
     # ==================== load_context 节点产出 ====================
 
     # 从数据库中加载出来的历史对话记录（用于多轮对话的上下文记忆）

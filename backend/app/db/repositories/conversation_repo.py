@@ -16,9 +16,10 @@ class ConversationRepository:
         self.session = session
 
     # 定义异步方法：创建一个新的对话
-    async def create(self, title: str = DEFAULT_CONVERSATION_TITLE) -> Conversation:
+    async def create(self, title: str = DEFAULT_CONVERSATION_TITLE, *, user_id: UUID | None = None) -> Conversation:
         # 实例化 Conversation 数据库模型对象，如果不传标题则使用默认的"新对话"
-        conversation = Conversation(title=title)
+        # user_id 非 None 时把会话归属到该用户；不传则保持历史行为（无归属）
+        conversation = Conversation(title=title, user_id=user_id)
         # 将该对象加入到当前 SQLAlchemy 的 session 会话中（此时还在内存中）
         self.session.add(conversation)
         # 【核心】执行 flush() 而不是 commit()。
@@ -39,10 +40,10 @@ class ConversationRepository:
         # 异步执行查询并获取结果：
         return int((await self.session.execute(stmt)).scalar_one())
 
-    async def list_page(self, page: int, page_size: int) -> tuple[list[tuple[Conversation, int]], int]:
+    async def list_page(self, page: int, page_size: int, *, user_id: UUID | None = None,) -> tuple[list[tuple[Conversation, int]], int]:
         """按 updated_at 倒序分页，返回（会话，消息数）列表 + 总数。
-
-        消息数用一次 LEFT JOIN + GROUP BY 拿，避免 N+1 查询。
+           user_id 非 None 时只返回该用户的会话；admin 视角不传即可拿到所有。
+           消息数用一次 LEFT JOIN + GROUP BY 拿，避免 N+1 查询。
         """
         # --- 1. 分页参数安全校验与偏移量计算 ---
         # 确保页码至少为 1
@@ -69,15 +70,24 @@ class ConversationRepository:
             .offset(offset)
         )
 
+        # 默认统计所有会话的数量
+        count_stmt = select(func.count(Conversation.id))
+
+        # 如果传入了 user_id，则对主查询和计数查询同时加上用户归属过滤条件
+        # 这样普通用户只能看到自己的会话，admin 视角不传 user_id 即可拿到所有
+        if user_id is not None:
+            stmt = stmt.where(Conversation.user_id == user_id)
+            count_stmt = count_stmt.where(Conversation.user_id == user_id)
+
+
         # 异步执行查询并获取所有结果行（rows 是一个列表，每项是包含 Conversation 和 message_count 的元组）
         rows = (await self.session.execute(stmt)).all()
         # 将结果转换为指定格式的列表：取出 Conversation 实例，并将 message_count 转为 Python int
         items = [(row[0], int(row[1])) for row in rows]
-
         # --- 3. 查询总记录数（用于前端分页组件） ---
         # 统计 Conversation 表的总行数，并转换为 int 类型
         total = int(
-            (await self.session.execute(select(func.count(Conversation.id)))).scalar_one()
+            (await self.session.execute(count_stmt)).scalar_one()
         )
 
         # 返回分页数据列表和总条数
@@ -89,12 +99,12 @@ class ConversationRepository:
         """
         return items, total
 
-    async def delete(self, conversation_id: UUID) -> bool:
+    async def delete(self, conversation_id: UUID, *, user_id: UUID | None = None,) -> bool:
         """硬删会话：messages / answer_citations 由 ON DELETE CASCADE 自动清理。
 
         返回是否真正删了一行，不存在时返回 False，便于路由 404 兜底。
         """
-        conversation = await self.get(conversation_id)
+        conversation = await self.get(conversation_id, user_id=user_id)
         if conversation is None:
             return False
         await self.session.delete(conversation)
@@ -128,10 +138,24 @@ class ConversationRepository:
         await self.session.flush()
 
     # 定义异步方法：根据对话 ID 获取单个对话
-    async def get(self, conversation_id: UUID) -> Conversation | None:
-        # 使用 SQLAlchemy 最推荐的 session.get() 方法进行主键查询。
-        # 它自带一级缓存，性能最好。找不到会返回 None。
-        return await self.session.get(Conversation, conversation_id)
+    async def get(self, conversation_id: UUID, *, user_id: UUID | None = None,) -> Conversation | None:
+        """按 id 查会话；user_id 非 None 时强制要求归属（admin 路径不传 user_id 即可不限）。"""
+
+        # 【管理员路径】如果没有传 user_id（代表是 admin 在操作），直接按主键查询
+        if user_id is None:
+            return await self.session.get(Conversation, conversation_id)
+
+        # 【普通用户路径】如果传了 user_id，则构建带权限过滤的 SQL 查询
+        stmt = select(Conversation).where(
+            # 条件1：会话 ID 必须匹配
+            Conversation.id == conversation_id,
+            # 条件2：该会话必须属于当前用户（防止用户 A 通过猜测 ID 偷看用户 B 的会话）
+            Conversation.user_id == user_id,
+        )
+
+        # 执行查询，返回 0 个或 1 个结果。
+        # 如果查到了（属于当前用户），返回会话对象；如果没查到（别人的会话或 ID 不存在），返回 None。
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     # 定义异步方法：获取指定对话下的所有消息（按时间正序）
     async def list_messages(self, conversation_id: UUID) -> list[Message]:
@@ -203,17 +227,7 @@ class ConversationRepository:
     # 装饰器：同样声明这是一个静态方法
     @staticmethod
     # 定义静态方法：快速构造一个“AI 助手（ASSISTANT）”角色的消息对象
-    def make_assistant_message(
-            # 对话 ID
-            conversation_id: UUID,
-            # AI 的回复内容
-            content: str,
-            # 星号 * 表示后面的参数必须使用关键字传递（强制关键字参数）
-            *,
-            # 可选参数：额外元数据（比如大模型名称、消耗的 token 数、耗时等）。默认为 None。
-            extra_metadata: dict | None = None,
-            # 返回类型为 Message ORM 对象
-    ) -> Message:
+    def make_assistant_message(conversation_id: UUID, content: str, *, extra_metadata: dict | None = None,) -> Message:
         # 实例化 Message 模型并返回
         return Message(
             # 绑定对话 ID

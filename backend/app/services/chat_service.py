@@ -11,9 +11,10 @@ from uuid import UUID
 from app.core.exceptions import NotFoundError
 from app.db.repositories.conversation_repo import ConversationRepository
 from collections.abc import AsyncIterator
-from app.db.models import AnswerCitation, Conversation, Message
+from app.db.models import AnswerCitation, Conversation, Message, User
 from app.db.repositories.citation_repo import AnswerCitationRepository
 from app.db.session import AsyncSessionLocal
+from app.services.permission_service import compute_user_permission_tags, WILDCARD_PERMISSION_TAG
 from app.workflows.graph import get_rag_graph
 from app.workflows.nodes import (
     load_context,
@@ -42,12 +43,13 @@ class ChatService:
         self.session = session
 
 
-    # 定义异步方法：创建一个新的对话
-    async def create_conversation(self, title: str = "新对话") -> Conversation:
+    # 定义异步方法：为当前登录用户创建一个新的对话
+    async def create_conversation(self, title: str = "新对话", *, current_user: User) -> Conversation:
         # 实例化对话仓储层，复用当前服务的数据库 session
         repo = ConversationRepository(self.session)
-        # 调用仓储层方法执行创建逻辑（内部会 flush，生成 UUID 等数据库默认值）
-        conversation = await repo.create(title=title)
+        # 调用仓储层方法执行创建逻辑，把新会话归属到当前用户
+        # （内部会 flush，生成 UUID 等数据库默认值）
+        conversation = await repo.create(title=title, user_id=current_user.id)
         # 提交数据库事务，将新对话真正持久化
         await self.session.commit()
         # 刷新对象状态，确保获取到数据库自动生成的最终字段（如创建时间）
@@ -56,11 +58,11 @@ class ChatService:
         return conversation
 
     # 定义异步方法：根据 ID 获取一个对话
-    async def get_conversation(self, conversation_id: UUID) -> Conversation:
+    async def get_conversation(self, conversation_id: UUID, *, current_user: User) -> Conversation:
         # 实例化对话仓储层
         repo = ConversationRepository(self.session)
         # 根据对话 ID 去数据库查询
-        conversation = await repo.get(conversation_id)
+        conversation = await repo.get(conversation_id, user_id=current_user.id)
         # 防御性校验：如果数据库里没有这条记录
         if conversation is None:
             # 抛出业务异常（404），由全局异常处理器捕获并返回给前端
@@ -70,11 +72,11 @@ class ChatService:
 
     # 定义异步方法：获取指定对话的详情以及其包含的所有历史消息
     async def list_messages(
-            self, conversation_id: UUID
+            self, conversation_id: UUID, *, current_user: User
     ) -> tuple[Conversation, list[Message]]:
         # 先校验会话存在，避免“空会话”和“会话不存在”被混淆
         # 直接调用上面的 get_conversation 方法。如果会话不存在，会在这里直接抛 404 异常中断
-        conversation = await self.get_conversation(conversation_id)
+        conversation = await self.get_conversation(conversation_id, current_user=current_user)
 
         # 实例化对话仓储层
         repo = ConversationRepository(self.session)
@@ -88,7 +90,7 @@ class ChatService:
 
     # 定义异步生成器方法：处理流式问答，逐个事件（Event）向前端 yield SSE（Server-Sent Events）数据
     @traceable(name="ChatService.stream_answer", run_type="chain")
-    async def stream_answer(self, conversation_id: UUID, question: str,  filters: RetrievalFilter | None = None,) -> AsyncIterator[dict]:
+    async def stream_answer(self, conversation_id: UUID, question: str,  filters: RetrievalFilter | None = None, *, current_user: User) -> AsyncIterator[dict]:
         """逐事件 yield SSE 载荷。
            事件协议（与前端约定）：
            message_start -> query_route -> agent_steps -> citations -> token...
@@ -101,7 +103,9 @@ class ChatService:
 
         # 校验会话存在用 service 自带 session；流式跑用独立 session
         # 前置校验：检查会话是否存在。如果不存在，这里会直接抛出 404 异常，阻断后续流式输出。
-        await self.get_conversation(conversation_id)
+        await self.get_conversation(conversation_id, user_id=current_user.id)
+        # 将当前登录的用户对象 current_user 传进去，计算得出最终的有效权限标签列表
+        permissions = compute_user_permission_tags(current_user)
         # 【核心】开启一个独立的数据库会话（Session）。
         # 因为流式响应可能持续几十秒甚至几分钟，不能一直占用 FastAPI 请求级别的短连接，否则会导致数据库连接池耗尽。
         async with AsyncSessionLocal() as session:
@@ -117,6 +121,8 @@ class ChatService:
                     "conversation_id": conversation_id,
                     # 存入用户当前问题
                     "question": question,
+                    # 存入用户权限标签
+                    "permissions": permissions,
                     # 存入 trace_id
                     "trace_id": trace_id,
                     # 存入检索过滤器
@@ -394,21 +400,22 @@ class ChatService:
         # 将数据库生成的 AI 消息主键 ID 回写到 state 中，供外层的 message_end 事件使用
         state["assistant_message_id"] = assistant_msg.id
 
-    async def list_conversations(self, page: int, page_size: int) -> tuple[list[tuple[Conversation, int]], int]:
-        """获取会话分页列表。"""
+    async def list_conversations(self, page: int, page_size: int, *, current_user: User) -> tuple[list[tuple[Conversation, int]], int]:
+        """获取当前登录用户的会话分页列表。"""
         # 实例化底层的数据访问对象（Repository），将当前的数据库 session 传进去
         repo = ConversationRepository(self.session)
         # 直接调用 Repository 中的 list_page 方法，处理分页逻辑并返回结果
-        # 这里的逻辑（LEFT JOIN 等）在你之前提问的 list_page 函数中
-        return await repo.list_page(page=page, page_size=page_size)
+        # 传入 current_user.id：普通用户只能看到自己的会话，admin 视角由路由层决定是否放开
+        return await repo.list_page(page=page, page_size=page_size, user_id=current_user.id)
 
 
-    async def delete_conversation(self, conversation_id: UUID) -> None:
-        """删除指定会话。"""
+    async def delete_conversation(self, conversation_id: UUID, *, current_user: User) -> None:
+        """删除当前登录用户的会话（只能删自己的）。"""
         # 同样，实例化 Repository
         repo = ConversationRepository(self.session)
         # 尝试执行删除操作，返回一个布尔值表示是否真的删除了数据
-        deleted = await repo.delete(conversation_id)
+        # 传 current_user.id：仓储层会先按“ID + 归属”查询，别人的会话等同不存在
+        deleted = await repo.delete(conversation_id, user_id=current_user.id)
 
         # 如果 deleted 为 False，说明数据库里没找到这个会话
         if not deleted:
@@ -440,6 +447,7 @@ class ChatService:
             "conversation_id": UUID(int=0),  # 占位，评测不写库所以用不到真实的会话ID
             "question": question,
             "chat_history": [],  # 强制清空历史，保证评测样本独立
+            "permissions": [WILDCARD_PERMISSION_TAG],  # 强制赋予所有权限标签
             "trace_id": trace_id,
         }
 

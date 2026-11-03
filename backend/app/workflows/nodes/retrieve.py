@@ -14,6 +14,8 @@ async def retrieve(state: RAGState) -> RAGState:
     # 2. 从配置中读取本次检索需要返回的 Top-K 数量
     recall_top_k = settings.retrieval_recall_top_k
 
+    permissions = state.get("permissions")
+
     # 3. 判断是否开启了多路查询（Multi-Query）策略，并且确实生成了子查询列表
     if state.get("multi_queries"):
         # 各子查询独立召回，再合并；不在这里做 RRF（倒数排名融合），留给下一期优化
@@ -23,14 +25,14 @@ async def retrieve(state: RAGState) -> RAGState:
         # 遍历所有的子查询（使用 or [] 兜底，防止空值报错）
         for sub_query in state["multi_queries"] or []:
             # 对每个子查询执行向量检索，拿到结果列表，并追加到 bundles 中
-            bundles.append(await retriever.search(sub_query,  recall_top_k=recall_top_k,  final_top_k=recall_top_k, filters=filters))
+            bundles.append(await retriever.search(sub_query,  recall_top_k=recall_top_k,  final_top_k=recall_top_k, filters=filters, permission_tags=permissions))
 
         # 【核心逻辑】将多路召回的结果进行去重、合并，并截取最终的 Top-K
         chunks = _merge_chunks(bundles, top_k=recall_top_k)
     else:
         # 如果不是多路查询策略（比如 original, rewrite, hyde），就只用单条查询进行检索
         # 注意：这里的 state["query"] 可能是原问题，也可能是改写后的问题，或者是假设性文档（HyDE）
-        chunks = await retriever.search(state["query"], recall_top_k=recall_top_k,  final_top_k=recall_top_k, filters=filters)
+        chunks = await retriever.search(state["query"], recall_top_k=recall_top_k,  final_top_k=recall_top_k, filters=filters, permission_tags=permissions)
 
     return {"retrieved_chunks": chunks}
 

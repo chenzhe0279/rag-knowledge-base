@@ -34,7 +34,7 @@ class HybridRetriever:
     """
 
     @traceable(name="HybridRetriever.search", run_type="retriever")
-    async def search(self, query: str, *, recall_top_k: int, final_top_k: int, filters: RetrievalFilter | None = None,) -> list[RetrievedChunk]:
+    async def search(self, query: str, *, recall_top_k: int, final_top_k: int, filters: RetrievalFilter | None = None, permission_tags: list[str] | None = None) -> list[RetrievedChunk]:
         """两路并发召回 + RRF 融合 + 取 final Top-K。
 
         任一路异常都退化为另一路结果，避免一处抖动阻断整个问答。
@@ -48,11 +48,11 @@ class HybridRetriever:
             # 2. query：用户的原始提问。
             # 3. recall_top_k：向量路单独召回的数量（比如先捞 20 条，给后面 RRF 融合留足弹药）。
             # 4. "vector"：一个字符串标识，用于在 _safe_search 内部打日志或标识错误来源。
-            self._safe_search(VectorRetriever, query, recall_top_k, "vector", filters),
+            self._safe_search(VectorRetriever, query, recall_top_k, "vector", filters, permission_tags),
 
             # 第二路：执行带异常保护的关键词检索。
             # 传入的参数逻辑同上，只是检索器换成了 KeywordRetriever，标识换成了 "keyword"。
-            self._safe_search(KeywordRetriever, query, recall_top_k, "keyword", filters),
+            self._safe_search(KeywordRetriever, query, recall_top_k, "keyword", filters, permission_tags),
         )
         return rrf_fuse(
             vector_hits=vector_hits,
@@ -71,6 +71,7 @@ class HybridRetriever:
             top_k: int,
             label: str,
             filters: RetrievalFilter | None = None,
+            permission_tags: list[str] | None = None
     ) -> list[RetrievedChunk]:
 
         try:
@@ -84,7 +85,7 @@ class HybridRetriever:
 
                 # 执行真正的检索逻辑并返回结果。如果是向量类，就走 search；如果是关键词类，也走 search。
                 # 等待检索完成，把数据返回给外层的 gather。
-                return await retriever.search(query, top_k, filters=filters)
+                return await retriever.search(query, top_k, filters=filters, permission_tags=permission_tags)
 
         # 【核心设计2：优雅降级（Graceful Degradation）】
         # 捕获任何可能的异常（如：数据库断连、pgvector 插件崩溃、分词器异常等）。

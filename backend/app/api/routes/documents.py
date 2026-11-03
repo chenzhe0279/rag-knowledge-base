@@ -1,8 +1,14 @@
+import json
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, Query, Response, UploadFile
-
+from fastapi import APIRouter, BackgroundTasks, File, Query, Response, UploadFile, Header, Form
+from app.api.deps import CurrentAdmin, CurrentUser
+from app.services.permission_service import (
+    compute_user_permission_tags,
+    is_admin,
+)
+from app.api.schemas.documents import DocumentPermissionTagsUpdate
 from app.api.deps import DbSession
 from app.api.schemas.documents import (
     DocumentChunkDetail,
@@ -16,6 +22,11 @@ from app.api.schemas.documents import (
 from app.db.models import DocumentStatus
 from app.services.document_service import DocumentService
 
+
+def _viewer_tags(user) -> list[str] | None:
+    """admin 视角传 None（service 内部转为不限）；普通用户传合并后的有效标签。"""
+    return None if is_admin(user) else compute_user_permission_tags(user)
+
 # 创建文档相关的路由实例
 # prefix="/documents"：该路由下的接口路径都会带上 /documents 前缀
 # tags=["documents"]：在 Swagger 接口文档中归类到 "documents" 标签下
@@ -24,18 +35,41 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 @router.post("", response_model=DocumentRead, status_code=201, operation_id="uploadDocument")
 async def upload_document(
+        admin: CurrentAdmin,
         session: DbSession,
         background_tasks: BackgroundTasks,
         # File(...) 表示这是一个必填的文件上传字段，并附带了接口文档的描述
         file: UploadFile = File(..., description="待上传文档 (PDF / DOCX / Markdown / HTML)"),
+        permission_tags: str | None = Form(default=None,description='JSON 数组字符串，例如 ["public","hr"]；空 / 不传视为公开',),
 ) -> DocumentRead:
     """上传文档：写入 COS、落库后立即返回，解析与向量化通过 BackgroundTasks 异步进行。"""
+    # 1. 初始化一个空的标签列表，作为最终的兜底默认值（空列表代表公开）
+    tags: list[str] = []
+
+    # 2. 如果前端确实传了 permission_tags（且不是空字符串）
+    if permission_tags:
+        try:
+            # 3. 尝试将传入的字符串按照 JSON 格式解析。
+            # 期望前端传的是类似 '["public", "hr"]' 的格式，解析后会变成真正的 Python 列表
+            parsed = json.loads(permission_tags)
+        except json.JSONDecodeError:
+            # 4. 【容错处理】如果前端传的不是合法的 JSON（比如只传了一个纯文本 'public'），
+            # 解析会报错。此时直接把整个字符串当成一个单标签包进列表里
+            # 直接当做单标签字符串吞下，提升使用容错
+            parsed = [permission_tags]
+
+        # 5. 【防御性校验】确保解析出来的结果确实是一个列表（List）。
+        # 防止前端传了 '{"a": 1}' 被解析成字典，或者传了 '123' 被解析成数字
+        if isinstance(parsed, list):
+            # 6. 遍历列表中的每一个元素，强制转换为字符串（str），并赋值给最终的 tags
+            # 比如前端如果传了 [1, 2] 这种数字，会被安全转换成 ["1", "2"]
+            tags = [str(t) for t in parsed]
     # 实例化文档服务，注入数据库会话
     service = DocumentService(session)
 
     # 调用服务层执行上传逻辑。注意这里将 background_tasks 传了进去，
     # 服务层在处理完落库后，会将耗时的解析任务推入后台执行。
-    document = await service.upload(file, background_tasks)
+    document = await service.upload(file, background_tasks, created_by=admin.id, permission_tags=tags)
 
     # 将 SQLAlchemy 的 ORM 对象（document）验证并转换为 Pydantic 响应模型（DocumentRead）
     # Pydantic V2 推荐使用 model_validate 替代 V1 的 from_orm
@@ -44,6 +78,7 @@ async def upload_document(
 
 @router.get("", response_model=DocumentListResponse, operation_id="listDocuments")
 async def list_documents(
+        user: CurrentUser,
         session: DbSession,
         # Query(默认值, 校验规则)：定义 URL 查询参数。
         # page 默认 1，最小值为 1；page_size 默认 20，限制在 1 到 100 之间。
@@ -62,6 +97,7 @@ async def list_documents(
         page,
         page_size,
         status=DocumentStatus(status) if status else None,
+        permission_tags=_viewer_tags(user),
     )
 
     # 组装并返回分页响应模型
@@ -75,7 +111,7 @@ async def list_documents(
 
 
 @router.get("/{document_id}", response_model=DocumentRead, operation_id="getDocument")
-async def get_document(document_id: UUID, session: DbSession) -> DocumentRead:
+async def get_document(document_id: UUID, user: CurrentUser, session: DbSession) -> DocumentRead:
     """
     根据 ID 获取单个文档的详细信息。
     路径中的 {document_id} 会自动绑定到函数的 document_id 参数。
@@ -84,14 +120,15 @@ async def get_document(document_id: UUID, session: DbSession) -> DocumentRead:
     service = DocumentService(session)
 
     # 调用服务层查询文档。如果文档不存在，服务层会抛出 NotFoundError（全局异常处理器会将其转为 404）
-    document = await service.get(document_id)
+    # 传入 permission_tags：普通用户看不到无权限的文档（与“不存在”同样返回 404，避免泄露文档是否存在）
+    document = await service.get(document_id, permission_tags=_viewer_tags(user))
 
     # 将数据库 ORM 对象转换为 Pydantic 响应模型，过滤敏感字段并格式化数据
     return DocumentRead.model_validate(document)
 
 
 @router.delete("/{document_id}", status_code=204, operation_id="deleteDocument")
-async def delete_document(document_id: UUID, session: DbSession) -> Response:
+async def delete_document(_: CurrentAdmin, document_id: UUID, session: DbSession) -> Response:
     """
     根据 ID 删除文档。
     注意状态码使用了 204 (No Content)，表示操作成功，但服务器不需要返回任何响应体。
@@ -106,7 +143,7 @@ async def delete_document(document_id: UUID, session: DbSession) -> Response:
 
 
 @router.post("/{document_id}/retry", response_model=DocumentRead, operation_id="retryDocument")
-async def retry_document(document_id: UUID, session: DbSession, background_tasks: BackgroundTasks,) -> DocumentRead:
+async def retry_document(_: CurrentAdmin, document_id: UUID, session: DbSession, background_tasks: BackgroundTasks,) -> DocumentRead:
     """
     重试失败（FAILED 状态）的文档解析入库任务。
     """
@@ -136,18 +173,34 @@ async def download_document(
         # ge=0, le=1 是 Pydantic 的数值约束：表示这个值最小是 0，最大是 1。
         # 这样设计可以防止前端不小心或恶意传入 download=999 这种无意义的值。
         download: int = Query(0, ge=0, le=1, description="1=强制下载，0=尝试内联预览"),
+        token: str | None = Query(None, description="Bearer token (iframe/新窗口无法带 header 时使用)"),
+        authorization: str | None = Header(None, alias="Authorization"),
 ) -> Response:
     """返回文档原始字节。
 
-    - PDF / HTML / Markdown：浏览器通常支持内联渲染，会直接在网页上打开预览。
-    - DOCX / 不支持预览的格式：浏览器无法渲染，必须强制 attachment 触发下载。
+    支持两种认证方式（优先 header）：
+    - Authorization header（常规 fetch 请求）
+    - ?token= query 参数（iframe / 浏览器直接打开时无法带 header）
     """
+    from app.api.deps import get_current_user
+    # 确定最终要用的认证凭证：
+    # - 优先使用从 Header 中提取的 authorization。
+    # - 如果 Header 为空，且 URL 中有 token 参数，则手动拼装成 "Bearer <token>" 的标准格式。
+    # - 如果两者都没有，则为 None。
+    effective_auth = authorization or (f"Bearer {token}" if token else None)
+
+    # 手动调用 get_current_user 函数。
+    # 注意：这里没有使用 FastAPI 的 Depends 依赖注入，而是直接像普通函数一样传参调用，
+    # 这样能在不支持依赖注入的特殊端点（如文件下载流）中灵活控制认证逻辑。
+    # 如果认证失败（Token 无效或过期），这行代码会直接抛出 UnauthorizedError。
+    user = await get_current_user(session, effective_auth)
     # 1. 实例化服务层，并注入数据库 session。
     service = DocumentService(session)
 
     # 2. 去数据库查这条文档的元数据（比如它的文件名、MIME 类型、以及在云存储中的 object_key）。
     # 如果没查到，service.get 内部会抛出 404 异常。
-    document = await service.get(document_id)
+    # 传 permission_tags：下载原文件属于读操作，同样要走文档可见性校验
+    document = await service.get(document_id, permission_tags=_viewer_tags(user))
 
     # 3. 拿着 object_key，去云存储（如腾讯云 COS）下载真实的文件二进制流（bytes）。
     # 注意：这里使用的是全量加载，如果文件特别大（如100MB），会占用服务器内存。
@@ -190,6 +243,7 @@ async def download_document(
 @router.get("/{document_id}/chunks", response_model=DocumentChunkListResponse, operation_id="listDocumentChunks")
 async def list_document_chunks(
         document_id: UUID,  # 路径参数，从 URL 中提取文档的 UUID
+        user: CurrentUser,  # 依赖注入，当前登录用户（用于文档可见性校验）
         session: DbSession,  # 依赖注入，自动获取当前请求的数据库异步会话
         # 分页参数：默认第 1 页，ge=1 保证页码不能小于 1
         page: int = Query(1, ge=1),
@@ -202,8 +256,10 @@ async def list_document_chunks(
     service = DocumentService(session)
 
     # 2. 调用服务层方法，获取分页数据、总条数以及统计信息
-    # service.list_chunks 内部会先校验文档是否存在，然后再查询数据
-    items, total, stats = await service.list_chunks(document_id, page, page_size)
+    # service.list_chunks 内部会先按 permission_tags 校验文档是否存在/可见，然后再查询数据
+    items, total, stats = await service.list_chunks(
+        document_id, page, page_size, permission_tags=_viewer_tags(user)
+    )
 
     # 3. 构建并返回响应对象
     return DocumentChunkListResponse(
@@ -232,7 +288,7 @@ async def list_document_chunks(
 
 
 @router.get("/{document_id}/chunks/{chunk_id}", response_model=DocumentChunkDetail, operation_id="getDocumentChunk")
-async def get_document_chunk(document_id: UUID,  chunk_id: UUID,  session: DbSession) -> DocumentChunkDetail:
+async def get_document_chunk(document_id: UUID,  chunk_id: UUID,  user: CurrentUser,  session: DbSession) -> DocumentChunkDetail:
     """
     获取指定文档下的单个文本块（Chunk）的完整详情。
 
@@ -244,7 +300,10 @@ async def get_document_chunk(document_id: UUID,  chunk_id: UUID,  session: DbSes
     # 2. 调用服务层方法获取 chunk。
     # 传入 document_id 和 chunk_id，服务层会执行双条件查询。
     # 如果找不到，服务层会抛出 NotFoundError（最终返回 404 给前端）。
-    chunk = await service.get_chunk(document_id, chunk_id)
+    # permission_tags：先校验文档可见性，再按 document_id + chunk_id 双条件取 chunk
+    chunk = await service.get_chunk(
+        document_id, chunk_id, permission_tags=_viewer_tags(user)
+    )
 
     # 3. 将 SQLAlchemy 的 ORM 对象转换为 Pydantic 响应模型。
     # 注意这里调用的不是 model_validate，而是作者自定义的工厂方法 from_orm_chunk。
@@ -267,7 +326,7 @@ async def get_document_thumbnail(document_id: UUID,  session: DbSession) -> Resp
 
 
 @router.patch(  "/{document_id}", response_model=DocumentRead, operation_id="renameDocument")
-async def rename_document(  document_id: UUID, payload: DocumentRenameRequest, session: DbSession, ) -> DocumentRead:  # 返回类型
+async def rename_document(_: CurrentAdmin, document_id: UUID, payload: DocumentRenameRequest, session: DbSession, ) -> DocumentRead:  # 返回类型
     service = DocumentService(session)  # 服务
     document = await service.rename(document_id, payload.name)  # 处理
     return DocumentRead.model_validate(document)  # 转 Pydantic
@@ -285,3 +344,22 @@ async def upload_document_thumbnail(
     service = DocumentService(session)  # 创建业务服务
     document = await service.upload_thumbnail(document_id, file)  # 处理、上传 COS、写回数据库
     return DocumentRead.model_validate(document)  # ORM 对象转 Pydantic 响应
+
+
+# =====================================================================
+# 接口作用：更新指定文档的权限标签（修改文档的密级/可见范围）。
+# 【权限控制】仅管理员可访问。
+# =====================================================================
+@router.patch("/{document_id}/permission-tags", response_model=DocumentRead, peration_id="updateDocumentPermissionTags",)
+async def update_permission_tags(_: CurrentAdmin, document_id: UUID, session: DbSession, payload: DocumentPermissionTagsUpdate,
+) -> DocumentRead:
+    # 实例化文档服务层
+    service = DocumentService(session)
+
+    # 调用服务层方法，执行权限标签更新（底层会去数据库更新对应的 ARRAY 字段）
+    document = await service.update_permission_tags(
+        document_id, payload.permission_tags
+    )
+
+    # 将更新后的数据库 ORM 对象转换为 Pydantic 响应模型并返回
+    return DocumentRead.model_validate(document)

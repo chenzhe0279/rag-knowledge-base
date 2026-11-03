@@ -1,7 +1,8 @@
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Query, Response
-
+from app.api.deps import DbSession, get_current_admin
+from fastapi import Depends
 from app.api.deps import DbSession
 from app.api.schemas.evaluations import (
     BadCaseCategoryValue,
@@ -18,7 +19,10 @@ from app.api.schemas.evaluations import (
 from app.services.evaluation_service import EvaluationService, execute_evaluation_run
 
 # 实例化 FastAPI 路由对象，设置统一前缀 /evaluations，并在 API 文档中打上 "evaluations" 标签
-router = APIRouter(prefix="/evaluations", tags=["evaluations"])
+"""
+用 `dependencies=[Depends(...)]` 挂在 router 上比每个路由都加 `CurrentAdmin` 参数更省事，缺点是路由内拿不到 `User` 对象
+"""
+router = APIRouter(prefix="/evaluations", tags=["evaluations"],  dependencies=[Depends(get_current_admin)],)
 
 
 # =====================================================================

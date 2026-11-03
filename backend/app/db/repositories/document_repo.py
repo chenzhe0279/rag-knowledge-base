@@ -1,9 +1,11 @@
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Document, DocumentStatus
+from app.db.repositories.chunk_repo import _permission_where
+
 
 class DocumentRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -11,12 +13,18 @@ class DocumentRepository:
         # 这样类中的其他方法（如 get_by_id、add 等）都能通过 self.session 来执行异步 SQL 操作。
         self.session = session
 
-    async def get_by_id(self, document_id: UUID) -> Document | None:
+    async def get_by_id(self, document_id: UUID, *, permission_tags: list[str] | None = None) -> Document | None:
         """
         根据主键 ID 查询文档。
         使用了 SQLAlchemy 2.0 中最推荐的 session.get() 方法，它自带一级缓存，性能最好。
         """
-        return await self.session.get(Document, document_id)
+        if permission_tags is None:
+            return await self.session.get(Document, document_id)
+        perm_where = _permission_where(permission_tags)
+        stmt = select(Document).where(Document.id == document_id)
+        if perm_where is not None:
+            stmt = stmt.where(perm_where)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def get_by_hash(self, file_hash: str) -> Document | None:
         """
@@ -66,7 +74,7 @@ class DocumentRepository:
         if error_message is not None or status != DocumentStatus.FAILED:
             doc.error_message = error_message
 
-    async def list_paginated(self, page: int, page_size: int, *, status: DocumentStatus | None = None,) -> tuple[list[Document], int]:
+    async def list_paginated(self, page: int, page_size: int, *, status: DocumentStatus | None = None, permission_tags: list[str] | None = None) -> tuple[list[Document], int]:
         """
         分页查询文档列表。
 
@@ -95,6 +103,17 @@ class DocumentRepository:
         if status is not None:
             items_stmt = items_stmt.where(Document.status == status)
             count_stmt = count_stmt.where(Document.status == status)
+
+        # 根据用户的权限标签，动态生成 SQL 权限过滤条件。
+        # 如果是 admin（包含 "*" 或传入 None），函数返回 None；如果是普通用户，返回数组重叠条件。
+        perm_where: ColumnElement[bool] | None = _permission_where(permission_tags)
+
+        # 如果生成了权限条件（说明是普通用户，需要权限隔离）
+        if perm_where is not None:
+            # 将权限条件追加到【查询当前页数据列表】的 SQL 语句中
+            items_stmt = items_stmt.where(perm_where)
+            # 将完全相同的权限条件追加到【查询数据总数】的 SQL 语句中
+            count_stmt = count_stmt.where(perm_where)
 
         # 5. 执行查询获取当前页的数据
         # execute() 拿到结果集，scalars() 取出实体对象，all() 转成列表

@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 
 from app.api.error_handlers import register_error_handlers
-from app.api.routes import health, documents, chat, evaluations
+from app.api.routes import health, documents, chat, evaluations, auth, users, roles
 from app.core.config import settings
 from app.core.logger import configure_logging, get_logger
 
@@ -91,6 +91,9 @@ def create_app() -> FastAPI:
     app.include_router(documents.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
     app.include_router(evaluations.router, prefix="/api")
+    app.include_router(auth.router, prefix="/api")
+    app.include_router(users.router, prefix="/api")
+    app.include_router(roles.router, prefix="/api")
     # 7. 记录一条应用初始化成功的日志（使用 %s 占位符延迟字符串拼接，提高性能）
     logger.info("app initialized：%s", settings.app_name)
 
