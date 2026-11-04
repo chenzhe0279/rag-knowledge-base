@@ -174,6 +174,30 @@ class Settings(BaseSettings):
     default_admin_password: str = "admin"
     default_admin_display_name: str = "管理员"
 
+    # ===== Redis（语义缓存 / 限流 / Celery broker，第 12 章引入） =====
+    # 应用直接客户端，不同 db 索引让 Celery broker / backend 互不干扰
+    # 应用直连缓存库：使用 0 号数据库，存放语义缓存和限流计数
+    redis_url: str = "redis://localhost:6379/0"
+    # Celery 消息中间件：使用 1 号数据库，存放排队等待执行的后台任务
+    celery_broker_url: str = "redis://localhost:6379/1"
+    # Celery 结果存储：使用 2 号数据库，存放任务执行完毕后的返回值
+    celery_result_backend: str = "redis://localhost:6379/2"
+
+    # ===== 语义缓存 =====
+    # 是否开启语义缓存。开启后，相似的问题直接走缓存，极大节省大模型 API 费用
+    semantic_cache_enabled: bool = True
+    # 缓存过期时间（秒）。默认 3600 秒（1小时），过期后需重新请求大模型
+    semantic_cache_ttl_seconds: int = 3600
+    # RedisVL 内部用「余弦距离 = 1 - 余弦相似度」做 KNN 查询，转换在 service 层完成
+    # 相似度阈值：0.92 表示用户的提问与历史缓存问题语义相似度达到 92% 以上才命中缓存
+    semantic_cache_min_similarity: float = 0.92
+
+    # ===== 滑动窗口限流=====
+    # 是否开启限流功能
+    rate_limit_enabled: bool = True
+    # 单用户每分钟最大写请求数（chat 对话 / 文件上传 / 重新索引等接口共享此限制）
+    rate_limit_per_minute: int = 60
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
