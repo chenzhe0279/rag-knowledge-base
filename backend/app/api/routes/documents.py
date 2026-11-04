@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, Query, Response, UploadFile, Header, Form
 from app.api.deps import CurrentAdmin, CurrentUser
+from app.core.rate_limiter import RateLimiter
 from app.services.permission_service import (
     compute_user_permission_tags,
     is_admin,
@@ -35,6 +36,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 @router.post("", response_model=DocumentRead, status_code=201, operation_id="uploadDocument")
 async def upload_document(
+        _rate_limit: RateLimiter,
         admin: CurrentAdmin,
         session: DbSession,
         background_tasks: BackgroundTasks,
@@ -167,6 +169,7 @@ _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 
 @router.get("/{document_id}/file", operation_id="downloadDocument")
 async def download_document(
+        _rate_limit: RateLimiter,
         document_id: UUID,
         session: DbSession,
         # 定义查询参数 download。默认值为 0（表示预览）。

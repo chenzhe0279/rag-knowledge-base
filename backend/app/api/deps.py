@@ -5,6 +5,9 @@ from uuid import UUID
 
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.rate_limiter import get_rate_limiter
 from app.db.session import get_session
 from app.core.exceptions import PermissionDeniedError, UnauthorizedError
 from app.core.security import decode_access_token
@@ -110,8 +113,28 @@ async def get_current_admin(user: Annotated[User, Depends(get_current_user)],) -
 
 
 # =====================================================================
+# 函数作用：FastAPI 的依赖注入函数，用于对特定接口进行限流拦截。
+# 在进入实际业务逻辑前，检查当前用户是否超过了每分钟的请求次数限制。
+# =====================================================================
+async def enforce_rate_limit(user: Annotated[User, Depends(get_current_user)],) -> None:
+    """滑动窗口限流：按 user_id 维度，每分钟最多 RATE_LIMIT_PER_MINUTE 次。
+
+    挂载在 chat / upload / reindex 等写接口；读接口（list / get）不挂以避免
+    前端列表 3s 轮询触发误伤。匿名 / API Key 入口的限流留给第 13 章 MCP。
+    """
+    # 如果全局配置关闭了限流开关，直接返回，不做任何拦截
+    if not settings.rate_limit_enabled:
+        return
+
+    # 调用之前定义的 RateLimiter 单例进行检测。
+    # 拼接以 "user:{user.id}" 为维度的 key，实现按用户ID隔离的限流计数。
+    # 如果超过限制，底层的 check 会抛出 RateLimitedError (HTTP 429)。
+    await get_rate_limiter().check(f"user:{user.id}")
+
+# =====================================================================
 # 类型别名：为了让路由层（Router）写起来更简洁。
 # 以后在写接口时，参数直接写 current_user: CurrentUser 即可。
 # =====================================================================
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
+RateLimited = Annotated[None, Depends(enforce_rate_limit)]
