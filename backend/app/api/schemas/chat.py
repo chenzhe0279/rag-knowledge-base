@@ -213,6 +213,8 @@ class MessageRead(BaseModel):
     trace_id: str | None = None
     # 根据 trace_id 和后台配置拼接好的完整跳转链接
     trace_url: str | None = None
+    # 语义缓存：True 表示本条 assistant 消息来自缓存命中（跳过了图和 LLM）
+    cache_hit: bool = False
 
     # 定义类方法：将数据库的 Message ORM 对象转换为当前的 Pydantic 响应模型
     @classmethod
@@ -271,7 +273,32 @@ class MessageRead(BaseModel):
             verify_result=verify_result,
             trace_id=trace_id,
             trace_url=build_trace_url(trace_id),
+            cache_hit=_parse_cache_hit(message.extra_metadata) if is_assistant else False,
         )
+
+
+# =====================================================================
+# 函数作用：安全地从数据库的扩展元数据（extra_metadata）中提取缓存命中标记。
+# 用于在前端请求历史记录时，告诉前端这条 AI 回答当时是不是从缓存里秒回的。
+# =====================================================================
+def _parse_cache_hit(metadata: dict | None) -> bool:
+    """从 messages.extra_metadata 中提取 cache_hit 标记。
+
+    历史消息没有该字段，按 False 处理。
+    """
+    # 1. 防御性判断：如果元数据为空（None 或空字典），说明是老数据或没存，直接返回 False
+    if not metadata:
+        return False
+
+    # 2. 从字典中获取 "cache_hit" 对应的值。
+    # 如果字段不存在，.get() 方法会默认返回 None，不会报错。
+    raw = metadata.get("cache_hit")
+
+    # 3. 使用 bool() 强制转换类型。
+    # 如果 raw 是 None，返回 False；如果 raw 是 True，返回 True。
+    # 这保证了无论数据库里存的是什么（可能是 1/0、None、True/False），最终都会转成标准的布尔值。
+    return bool(raw)
+
 
 
 def _parse_verify_result(metadata: dict | None) -> VerifyResultRead | None:
