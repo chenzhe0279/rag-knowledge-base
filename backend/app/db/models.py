@@ -82,7 +82,8 @@ class Document(Base):
     )
     # 如果解析或向量化失败了，把具体的错误信息记录在这里，方便排查。允许为空。
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-
+    # 文档版本号：每次 reindex 成功后 +1，前端列表可见，标识「内容已变更」
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     # 空数组视为"公开"，任意登录用户可见可检索，
     # 用于兼容之前上传的存量文档。
     # 非空数组与用户有效权限标签做数组重叠匹配（admin 持 "*" 通配）。
@@ -116,6 +117,24 @@ class Document(Base):
     # relationship() 是 SQLAlchemy 中最核心、最强大的功能之一。简单来说，它是用来建立两个 Python 对象（模型）之间的“情感羁绊”的
     chunks: Mapped[list["DocumentChunk"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    # 关联关系：定义当前文档（Document）与入库任务（IngestionTask）的一对多关系。
+    # 一个文档可能会经历多次处理（首次入库、后来的增量重建等），所以是一个列表。
+    ingestion_tasks: Mapped[list["IngestionTask"]] = relationship(
+        # 双向绑定：在 IngestionTask 类中一定有一个叫 "document" 的属性指回这里
+        back_populates="document",
+
+        # 级联删除：如果当前文档被删除，它关联的所有入库任务记录也会被一并删除。
+        # delete-orphan 表示如果某个任务被移出了这个列表（变成孤儿），它也会自动被删掉
+        cascade="all, delete-orphan",
+
+        # 性能优化：告诉 SQLAlchemy，删除文档时，直接把删除任务的工作交给数据库底层（外键的 ON DELETE CASCADE）去处理，
+        # 不要傻傻地先查出来再一条条删
+        passive_deletes=True,
+
+        # 排序规则：当你在代码里访问 doc.ingestion_tasks 时，返回的任务列表会自动按创建时间倒序排列（最新的在最前）
+        order_by="IngestionTask.created_at.desc()",
     )
 
     @property
@@ -759,3 +778,116 @@ class Role(Base):
         # 双向绑定：在 User 类中可以通过 roles 属性反向查找到拥有该角色的所有用户
         back_populates="roles",
     )
+
+
+
+# =====================================================================
+# 类作用：定义文档入库任务的类型（是首次全新入库，还是增量重建）。
+# =====================================================================
+class IngestionTaskType(str, Enum):
+    """入库任务类型。
+
+    ingest:  首次入库（解析 -> 切分 -> 全量 embedding -> 写入）
+    reindex: 增量重建（按 chunk_hash 对齐，仅对变化 chunk 重新 embedding）
+    """
+
+    # 首次入库：将全新的文档完整解析、切块、向量化并存入数据库
+    INGEST = "ingest"
+    # 增量重建索引：当文档内容更新时，只对发生变化的文本块重新计算向量（省钱省时间）
+    REINDEX = "reindex"
+
+
+# =====================================================================
+# 类作用：定义 Celery 异步任务的生命周期状态。
+# 用于业务数据库（ingestion_tasks 表）跟踪文档处理进度，方便前端展示。
+# =====================================================================
+class IngestionTaskStatus(str, Enum):
+    """Celery 任务生命周期。
+
+    pending: 已入库表、还没被 worker 拉走
+    running: worker 已开始执行
+    success / failed: 终态
+    """
+
+    # 待处理：任务记录已写入数据库，正在 Redis 队列里排队等 Worker 处理
+    PENDING = "pending"
+    # 执行中：Worker 已拿到任务，正在疯狂跑解析和 embedding
+    RUNNING = "running"
+    # 成功：任务无报错跑完，文档已全部入库
+    SUCCESS = "success"
+    # 失败：执行过程中发生报错（如解析失败、大模型超时），需要人工介入或重试
+    FAILED = "failed"
+
+
+# =====================================================================
+# 类作用：文档入库任务记录表（IngestionTask）。
+# 负责追踪 Celery 异步任务的完整生命周期，方便前端展示处理进度和失败原因。
+# =====================================================================
+class IngestionTask(Base):
+    """文档入库任务记录。
+
+    Celery 拉起 worker 前先在 DB 落一条 pending 行；worker 内根据生命周期更新
+    running -> success/failed。前端轮询 documents 接口附带 `latest_task` 即可
+    展示进度（progress_total / progress_done）与失败原因。
+    """
+
+    # 数据库表名
+    __tablename__ = "ingestion_tasks"
+
+    # ================= 基础信息 =================
+    # 主键 ID
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+
+    # 关联的文档 ID（外键）
+    document_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        # 级联删除：如果文档被物理删除，对应的所有任务记录也会自动删除
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=False,
+        # 加索引：便于高频查询某个文档的所有处理任务
+        index=True,
+    )
+
+    # 任务类型（首次入库 ingest / 增量重建 reindex）
+    task_type: Mapped[IngestionTaskType] = mapped_column(String(16), nullable=False)
+
+    # 任务状态（pending / running / success / failed）
+    status: Mapped[IngestionTaskStatus] = mapped_column(
+        String(16), nullable=False, default=IngestionTaskStatus.PENDING
+    )
+
+    # ================= 异常与重试 =================
+    # 重试次数（Celery 任务失败后可能会自动重试）
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # 如果任务失败，记录具体的错误堆栈或原因
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ================= 进度追踪 =================
+    # 进度：reindex 时 total=新增 chunks 数，done=已 embedding 的批次累计
+    # ingest 走全量 embedding，total=切分后总 chunks 数
+    # 进度总数（比如文档被切分成了 100 个 chunk，这里就是 100）
+    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 已完成数（已经成功向量化了多少个 chunk）
+    progress_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # ================= 时间戳 =================
+    # Worker 真正开始执行任务的时间（排队期间为 None）
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 任务执行完毕（成功或失败）的时间
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 任务记录创建时间（即任务被扔进队列的时间），由数据库服务器自动生成
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # ================= 关联关系 =================
+    # 多对一关系：反向指回 Document 对象
+    # 通过 task.document 可以直接拿到对应的文档实体
+    document: Mapped[Document] = relationship(back_populates="ingestion_tasks")
