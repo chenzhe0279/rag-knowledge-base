@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logger import get_logger
 from app.core.observability import get_current_trace_id, build_trace_url
+from app.ingestion import embedder
 from app.llm.answer_verifier import VerifyResult, get_answer_verifier
 from app.llm.prompts import REFUSAL_ANSWER
 from app.retrieval.filters import RetrievalFilter
@@ -26,6 +27,8 @@ from app.workflows.nodes import (
 import time
 from dataclasses import dataclass, field
 from app.workflows.rag_state import RAGState
+from app.services.semantic_cache_service import SemanticCacheService, get_semantic_cache, CachedAnswer
+
 # 获取当前模块的日志记录器，用于打印该文件产生的运行日志
 logger = get_logger(__name__)
 
@@ -133,11 +136,32 @@ class ChatService:
                 # 调用 load_context 节点，从数据库拉取历史对话记录，并更新到 state 中
                 state.update(await load_context(state, session))
 
-                # 2. 跑 RAG 子图: normalize_query ->  route_query -> 检索决策循环
+                # 2. 语义缓存：相似度阈值 + 权限范围一致才视为命中。
+                # 命中时跳过整个图与 LLM，直接发缓存答案；query_embedding 在
+                # 未命中分支由 retrieve 节点重新算（这里不复用是为了让缓存查询与主链路解耦）
+                # 尝试查询语义缓存。传入用户的问题和权限。
+                # 如果命中，返回缓存对象（包含 answer 和 citations）；如果未命中，返回 None。
+                cache_hit, query_embedding = await self._try_cache_lookup(
+                    question, permissions
+                )
+
+                # 【短路逻辑】如果查到了缓存（命中）
+                if cache_hit is not None:
+                    # 3. 直接调用流式输出函数，把缓存里的答案当成正常生成的答案，逐字（逐事件）吐给前端。
+                    # 这样前端完全感觉不到是缓存，依然有打字机效果。
+                    async for event in self._stream_cache_hit(
+                            state, session, cache_hit, trace_id
+                    ):
+                        yield event
+                    # 4. 【核心操作】直接 return，结束当前函数！
+                    # 这意味着后面的 RAG 图（检索、重排、调用大模型）统统不会执行。
+                    return
+
+                # 3. 跑 RAG 子图: normalize_query ->  route_query -> 检索决策循环
                 final_state = await get_rag_graph().ainvoke(state)
                 state.update(final_state) # type = ignore[arg-type]
 
-                # 3. user 消息落库
+                # 4. user 消息落库
                 # 将用户本次的提问保存到数据库（独立提交），拿到 user_message_id，防止后续生成失败丢失用户提问
                 await self._persist_user_message(state, session)
 
@@ -248,6 +272,27 @@ class ChatService:
                     state, session, verify_result=verify_result
                 )
 
+                # 8. 写回缓存：仅非拒答 + verify 通过路径，写入「问题向量 + 答案 + 引用」
+                # query_embedding 在 cache lookup 阶段已经算过一次，直接复用
+
+                # 判断是否满足写入缓存的条件：
+                # 1. 全局配置开启了语义缓存
+                # 2. 本次回答没有触发“拒答”（refused 为 False）
+                # 3. 存在 query_embedding 向量（必须要有向量才能存入 Redis 做后续的相似度匹配）
+                if (
+                        settings.semantic_cache_enabled
+                        and not state.get("refused")
+                        and query_embedding is not None
+                ):
+                    # 调用缓存服务，将数据异步写入 Redis
+                    await get_semantic_cache().save(
+                        question=question,  # 用户的原始问题
+                        query_embedding=query_embedding,  # 问题的向量表示（用于后续相似度计算）
+                        answer=state["answer"],  # 大模型生成的最终答案
+                        citations=citations_payload,  # 这次回答用到的引用列表
+                        permission_scope=permissions,  # 权限范围（用于实现权限隔离）
+                    )
+
                 # 发送最后一个 SSE 事件：通知前端对话生成已完全结束，并回传助手消息的 ID 和是否拒答的状态
                 yield {
                     "event": "message_end",
@@ -328,6 +373,8 @@ class ChatService:
             "agent_steps": _serialize_agent_steps(state),
             # LangSmith trace_id 落库，刷新历史时前端仍可展示 / 跳转
             "trace_id": state.get("trace_id"),
+            # 正常 RAG 路径产生的消息一定不是缓存命中
+            "cache_hit": False,
             # 将当前 RAG 状态中的过滤条件序列化为 JSON 字典，并赋值给外层字典的 "retrieval_filters" 键。
             "retrieval_filters": _build_filter_payload(state.get("filters")),
         }
@@ -550,6 +597,148 @@ class ChatService:
                 error_message=str(exc).strip() or exc.__class__.__name__,
             )
 
+    # =====================================================================
+    # 方法作用：尝试查询语义缓存。
+    # 返回值：(缓存结果, 问题的向量表示)
+    # =====================================================================
+    async def _try_cache_lookup(self, question: str, permissions: list[str]) -> tuple[CachedAnswer | None, list[float] | None]:
+        """查询语义缓存。
+
+        返回（命中项，query_embedding）：
+        - 关掉缓存或 embedding 失败时全部返回（None, None），主链路兜底
+        - 未命中时返回（None, embedding），外层在 save 阶段可以直接复用
+        """
+        # 1. 如果全局未开启语义缓存，直接返回 (None, None)，不消耗任何算力
+        if not settings.semantic_cache_enabled:
+            return None, None
+
+        try:
+            # 2. 调用配置的 Embedding 模型，将用户的自然语言问题转化为高维向量
+            embedding = await embedder.get_embeddings().aembed_query(question)
+        except Exception:
+            # 3. 如果大模型接口挂了或网络超时，记录异常，返回 (None, None) 降级处理
+            logger.exception("semantic cache: embedding failed, skip lookup")
+            return None, None
+
+        # 4. 拿着算好的向量和用户权限，去 Redis 里面搜寻相似的历史问题
+        cached = await get_semantic_cache().lookup(embedding, permissions)
+
+        # 5. 返回查询结果（命中则是对象，未命中则是 None）以及刚算出的向量（供后续保存复用）
+        return cached, embedding
+
+    # =====================================================================
+    # 方法作用：处理缓存命中的流式输出（SSE）与数据落库。
+    # =====================================================================
+    async def _stream_cache_hit(self, state: RAGState, session: AsyncSession, cached: CachedAnswer, trace_id: str | None,) -> AsyncIterator[dict]:
+        """命中分支的简化 SSE：跳过 query_route / agent_steps / verify_result，
+        但仍要落库 user / assistant 消息，保证历史记录完整。"""
+
+        # 1. 将缓存中的答案填入全局状态（State）
+        state["answer"] = cached.answer
+        # 2. 缓存命中的答案肯定是正常回答，强制设置 refused 为 False
+        state["refused"] = False
+
+        # 3. 【落库】先把用户的提问保存到数据库，生成 user_message_id
+        await self._persist_user_message(state, session)
+
+        # 4. 发送第一个 SSE 事件：通知前端对话开始，并带上缓存命中的标识
+        yield {
+            "event": "message_start",
+            "data": {
+                "user_message_id": str(state["user_message_id"]),
+                "trace_id": trace_id,
+                "trace_url": build_trace_url(trace_id),
+                "cache_hit": True,  # 这是一个非常关键的前端标识，前端可以据此显示“⚡ 极速响应”
+            },
+        }
+
+        # 5. 发送第二个 SSE 事件：把缓存里的引用列表推给前端，让前端渲染参考来源
+        yield {
+            "event": "citations",
+            "data": {"citations": cached.citations},
+        }
+
+        # 6. 发送第三个 SSE 事件：把完整的缓存答案作为 "delta" 一次性发给前端。
+        # 注释解释：虽然是一次性发的，但前端只要按照 token 累加渲染，依然能实现秒出的打字机效果。
+        yield {"event": "token", "data": {"delta": cached.answer}}
+
+        # 7. 【落库】把 AI 的回答和引用保存到数据库，生成 assistant_message_id
+        await self._persist_cached_assistant_message(
+            state, session, citations=cached.citations
+        )
+
+        # 8. 发送最后一个 SSE 事件：通知前端对话彻底结束
+        yield {
+            "event": "message_end",
+            "data": {
+                "message_id": str(state["assistant_message_id"]),
+                "refused": False,
+            },
+        }
+
+    # =====================================================================
+    # 方法作用：在“缓存命中”路径下，将 AI 助手的回答及引用落库。
+    # 保证即使是缓存返回的答案，用户在刷新历史记录时依然能完整看到。
+    # =====================================================================
+    async def _persist_cached_assistant_message(self, state: RAGState, session: AsyncSession, *, citations: list[dict],) -> None:
+        """缓存命中路径下落库 assistant 消息。
+
+        - cache_hit=True 写入 metadata，刷新历史时前端继续展示「缓存命中」Tag
+        - citations 完全复用缓存里的快照（含 retrieval_meta），保证历史与命中
+          原始问答完全一致；新引用 row 由后端基于 ordinal 顺序重建
+        """
+        # 1. 实例化对话仓储和引用仓储，用于操作数据库
+        conv_repo = ConversationRepository(session)
+        citation_repo = AnswerCitationRepository(session)
+
+        # 2. 构建助手的消息实体对象
+        assistant_msg = ConversationRepository.make_assistant_message(
+            state["conversation_id"],
+            content=state["answer"],
+            # 【核心标识】在扩展元数据中打上 cache_hit=True 的标记
+            # 这样前端在渲染历史记录时，可以给这条消息加个“极速缓存”的徽章
+            extra_metadata={
+                "refused": False,
+                "trace_id": state.get("trace_id"),
+                "cache_hit": True,
+            },
+        )
+        # 3. 将新构建的消息对象加入数据库会话（此时会生成主键 ID）
+        await conv_repo.add_messages([assistant_msg])
+
+        # 4. 重建引用记录
+        # 因为缓存里存的是 JSON 字典列表，需要把它们转换成数据库的 ORM 对象
+        citation_rows = [
+            AnswerCitation(
+                message_id=assistant_msg.id,  # 关联刚刚生成的 AI 消息 ID
+                # 安全获取序号。如果缓存里有 ordinal 就用，没有就用列表的索引+1（默认从1开始）
+                ordinal=int(c.get("ordinal") or idx + 1),
+                # 【注意】Redis 里存的是字符串，这里用 _safe_uuid 安全转换为 UUID 类型入库
+                document_id=_safe_uuid(c.get("document_id")),
+                chunk_id=_safe_uuid(c.get("chunk_id")),
+                # 获取文档名称，默认空字符串兜底
+                document_name=c.get("document_name", ""),
+                # 获取页码
+                page_no=c.get("page_no"),
+                # 获取引用原文片段
+                quote=c.get("quote", ""),
+                # 获取检索元数据（包含向量得分、重排得分等）
+                retrieval_meta=c.get("retrieval_meta"),
+            )
+            # 遍历传入的缓存引用字典列表
+            for idx, c in enumerate(citations)
+        ]
+
+        # 5. 如果解析出了引用记录，执行批量插入（性能更好）
+        if citation_rows:
+            await citation_repo.bulk_add(citation_rows)
+
+        # 6. 提交事务，将 AI 消息和所有引用记录真正持久化到数据库中
+        await session.commit()
+
+        # 7. 将生成的 AI 消息 ID 回写到全局状态（State）中
+        # 这样外层生成 SSE 事件（message_end）时，就能把这个 ID 发给前端
+        state["assistant_message_id"] = assistant_msg.id
 
 # 定义内部函数：将检索到的文本块对象序列化为字典格式，用于通过 SSE 推送给前端
 def _serialize_citation(chunk: RetrievedChunk, ordinal: int) -> dict:
@@ -765,4 +954,27 @@ class EvaluationAnswer:
 
     # 系统生成的引用列表。使用 field(default_factory=list) 确保每个实例都有独立的空列表，避免共享内存
     citations: list[dict] = field(default_factory=list)
+
+
+# =====================================================================
+# 函数作用：安全地将字符串转换为 UUID 对象。
+# 背景：Redis 缓存中的 JSON 数据，其 ID 字段只能是字符串；
+# 但存入 PostgreSQL 数据库时，对应的字段类型是 UUID。此函数负责安全转换。
+# =====================================================================
+def _safe_uuid(raw: str | None) -> UUID | None:
+    """缓存里 citation 的 document_id / chunk_id 是字符串，落库需要 UUID。
+
+    历史快照中可能为 None（原 chunk 已被删），按可空字段处理。
+    """
+    # 1. 防御性判断：如果传入的是 None 或空字符串，直接返回 None
+    if not raw:
+        return None
+
+    try:
+        # 2. 尝试将输入强制转为字符串，并解析为标准的 UUID 对象
+        return UUID(str(raw))
+    except (TypeError, ValueError):
+        # 3. 【终极兜底】如果传入的字符串格式不合法（比如 "abc" 或 "123"），
+        # UUID() 解析会抛出异常。此时捕获异常并返回 None，防止整个数据回填流程崩溃。
+        return None
 
