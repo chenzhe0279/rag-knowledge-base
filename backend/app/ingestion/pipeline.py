@@ -419,6 +419,272 @@ def _make_chunk(document_id: UUID, chunk: LangChainDocument, embedding: list[flo
         extra_metadata=chunk.metadata,
     )
 
+# =====================================================================
+# 方法作用：文档增量重建（Reindex）的核心流水线。
+# 负责：下载解析 -> 切分 -> 比对 Hash -> 按需走增量或全量重建 -> 版本号 +1。
+# =====================================================================
+async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
+    """增量重建：按 chunk_hash 对齐，仅对变化部分重新 embedding。
+
+    与 _run_ingest 的区别：
+    - 命中的 chunk 不重新计算 embedding，仅更新 chunk_index / metadata
+    - 新增 chunk 才走 embedding，progress_total 也只统计新增数量
+    - 全删全插作为 hash 冲突场景的兜底
+    """
+    # 1. 记录开始日志并标记任务为运行中
+    logger.info("reindex start: document_id=%s task_id=%s", document_id, task_id)
+    await _mark_task(task_id, running=True)
+
+    try:
+        # ================= 阶段 1：获取文档并下载 =================
+        async with AsyncSessionLocal() as session:
+            document = await DocumentRepository(session).get_by_id(document_id)
+            if document is None:
+                logger.warning("document not found, skip reindex: %s", document_id)
+                await _mark_task_failed(task_id, "文档不存在")
+                return
+            object_key = document.cos_object_key
+            filename = document.name
+
+        await _set_status(document_id, DocumentStatus.PARSING)
+        content = await get_file_service().download(object_key)
+        parsed = await parser.parse(filename, content)
+
+        # ================= 阶段 2：重新切分文本 =================
+        await _set_status(document_id, DocumentStatus.INDEXING)
+        new_chunks = splitter.split(parsed)
+        if not new_chunks:
+            raise ValueError("切分后没有任何 chunk，请检查文档内容")
+
+        # ================= 阶段 3：拉取旧数据做 Hash 比对 =================
+        # 拉旧 chunks 做 hash 对齐
+        async with AsyncSessionLocal() as session:
+            old_chunks = await DocumentChunkRepository(session).list_all_by_document(
+                document_id
+            )
+
+        # ================= 阶段 4：判断走增量还是全量 =================
+        if _has_duplicate_hash(new_chunks):
+            # 同文档内 chunk_hash 重复（多见于极短文档或重复段落），
+            # 增量对齐逻辑会歧义；退化为「全删全插」是最稳的兜底
+            logger.warning(
+                "reindex fallback to full rebuild due to duplicate chunk_hash: %s",
+                document_id,
+            )
+            # 走全量重建逻辑
+            await _run_full_rebuild(document_id, task_id, new_chunks)
+        else:
+            # 如果没有重复 hash，说明可以安全地按 Hash 进行精准增量对比
+            await _run_incremental(document_id, task_id, old_chunks, new_chunks)
+
+        # ================= 阶段 5：更新版本号 =================
+        # 内容已成功重建：版本号 +1
+        async with AsyncSessionLocal() as session:
+            doc_repo = DocumentRepository(session)
+            doc = await doc_repo.get_by_id(document_id)
+            if doc is not None:
+                doc.version += 1
+            await session.commit()
+
+        # ================= 阶段 6：完成收尾 =================
+        await _set_status(document_id, DocumentStatus.READY, error_message=None)
+        await _mark_task_success(task_id)
+
+    # ================= 异常兜底处理 =================
+    except Exception as exc:
+        logger.exception("reindex failed: document_id=%s", document_id)
+        message = str(exc).strip() or exc.__class__.__name__
+        await _set_status(document_id, DocumentStatus.FAILED, error_message=message[:500])
+        await _mark_task_failed(task_id, message)
+
+
+# =====================================================================
+# 函数作用：检查切分出来的文本块列表中，是否存在重复的 Hash 值。
+# 用于规避增量更新的逻辑漏洞（比如一句话被切分成了两块一模一样的）。
+# =====================================================================
+def _has_duplicate_hash(chunks: list[LangChainDocument]) -> bool:
+    # 使用 Set 记录已经出现过的 Hash 值，利用 Set 的 O(1) 查找特性极大提升比对速度
+    seen: set[str] = set()
+    for c in chunks:
+        # 强制获取每个 chunk 的 hash 值（如果切分器没生成，这里会报 KeyError 提醒开发者）
+        h = c.metadata["chunk_hash"]
+        # 如果这个 Hash 已经在集合里了，说明出现了重复
+        if h in seen:
+            return True
+        # 没重复，就加进集合里继续往后比
+        seen.add(h)
+    # 遍历完都没重复，返回 False
+    return False
+
+
+# =====================================================================
+# 方法作用：文档增量重建（Incremental Reindex）的精确比对与执行逻辑。
+# 核心思想：不全部删掉重来，而是通过比对 Hash 值，只删除废弃的、更新位置变动的、新增并计算未存在的。
+# 这能极大节省大模型 Embedding 的 API 费用和时间。
+# =====================================================================
+async def   _run_incremental(
+        document_id: UUID,
+        task_id: UUID,
+        old_chunks: list[DocumentChunk],  # 数据库里查出来的旧数据
+        new_chunks: list[LangChainDocument],  # 刚刚切分出来的新数据
+) -> None:
+    """
+    增量重建（Incremental Reindex）分类规则详解：
+
+   核心思想：用最小的代价完成文档内容的同步。判断依据是 chunk_hash（文本块的哈希指纹）。
+   只要文本内容一个字都没变，它的 Hash 就绝对一样；改了一个标点，Hash 就会天翻地覆。
+
+   规则一：old 中存在，但 new 已经没有的 hash -> DELETE (彻底删除)
+
+  规则二：new 中已存在的 hash -> 只更新 chunk_index / metadata (不重新 embedding)
+  - 场景：用户没改内容，但文档结构变了。比如开头加了新页，导致后面的段落整体往后挪了一位（页码/序号变了）。
+  - 动作：没必要再去花钱求大模型算 Embedding。只需更新数据库里的 page_no（页码）、chunk_index（顺序号）等元数据即可。这是省钱的绝对核心。
+
+  规则三：new 中不存在于 old 的 hash -> INSERT (需要 embedding)
+  - 场景：用户写了全新内容，或者修改了原有段落。
+  - 动作：数据库里没有它的向量，必须调用 Embedding 模型算出高维向量，然后作为新的一行插入数据库。
+   """
+    # ================= 阶段 1：将旧数据转成字典，方便极速查找 =================
+    # old_by_hash 字典的格式：{ "a1b2c3d4...": DocumentChunk对象, ... }
+    # 用字典是为了让后续查找的时间复杂度从 O(N) 降到 O(1)
+    old_by_hash = {c.chunk_hash: c for c in old_chunks}
+
+    # 提取所有新文本块的 hash 值，存入集合（Set），同样是为了极速比对
+    new_hashes = {c.metadata["chunk_hash"] for c in new_chunks}
+
+    # ================= 阶段 2：找出需要彻底删除的旧数据 =================
+    # 遍历旧数据，如果它的 hash 在新数据里找不到，说明这段内容在最新文档里被删除了
+    # 1. 先准备一个空列表，用来装所有需要删除的文档块 ID
+    to_delete_ids: list[UUID] = []
+
+    # 2. 遍历数据库里查出来的所有旧文档块
+    for c in old_chunks:
+        # 3. 核心判断：看看这个旧块的指纹（hash），在最新的指纹集合里存不存在
+        if c.chunk_hash not in new_hashes:
+            # 4. 如果不在，说明这段话在新版文档里被删掉了，把它的 ID 记下来
+            to_delete_ids.append(c.id)
+
+    # ================= 阶段 3：对最新切分的数据进行分类 =================
+    to_vector: list[LangChainDocument] = []  # 需要全新计算向量的新数据
+    to_update: list[tuple[DocumentChunk, LangChainDocument]] = []  # 只需更新元数据的数据
+
+    for nc in new_chunks:
+        h = nc.metadata["chunk_hash"]
+        # 去旧数据字典里找找，有没有一样的 hash
+        existing = old_by_hash.get(h)
+
+        if existing is None:
+            # 找不到，说明这是文档更新后新增的内容，需要走向量计算
+            to_vector.append(nc)
+        else:
+            # 找到了，说明内容没变（比如只是把这一段挪到了上面），不需要重新算向量，只更新序号
+            # 注意这里存的是一个元组 (旧对象, 新对象)，方便后面比对属性
+            to_update.append((existing, nc))
+
+    # ================= 阶段 4：只对新增数据计算向量 =================
+    # 进度条的总数只设为新增的数量
+    await _set_task_total(task_id, len(to_vector))
+    # 调用分批向量化函数（传空列表也不会报错，函数内部有兜底）
+    new_embeddings = await _embed_with_progress(
+        [c.page_content for c in to_vector], task_id
+    )
+
+    # ================= 阶段 5：数据库落库操作 =================
+    async with AsyncSessionLocal() as session:
+        chunk_repo = DocumentChunkRepository(session)
+
+        # 1. 执行删除操作
+        await chunk_repo.delete_by_ids(to_delete_ids)
+
+        # 2. 更新命中的 chunk 的位置 / 段落元数据
+        # 更新命中 chunk 的位置 / 段落元数据：内容（即 hash）未变所以不动 embedding
+        for old, nc in to_update:
+            old.chunk_index = nc.metadata["chunk_index"]
+            old.page_no = nc.metadata.get("page_no")
+            old.section_path = nc.metadata.get("section_path")
+            old.extra_metadata = nc.metadata
+
+        # 3. 批量插入新数据及其向量
+        # 1. 先准备一个空的列表，用来装所有组装好的、准备插入数据库的实体对象
+        chunks_to_insert = []
+
+        # 2. 使用 zip 把文本块列表 (to_vector) 和向量列表 (new_embeddings) 一一配对，并遍历
+        # 假设 to_vector 有 100 个文本，new_embeddings 有 100 个向量
+        for c, vec in zip(to_vector, new_embeddings, strict=True):
+            # c 是当前循环的文本块，vec 是它对应的向量
+
+            # 3. 调用 _make_chunk 方法，把这两者加上 document_id，拼装成一个数据库 ORM 对象
+            chunk_obj = _make_chunk(document_id, c, vec)
+
+            # 4. 把拼装好的对象塞进大列表里
+            chunks_to_insert.append(chunk_obj)
+
+        # 5. 最终，把装满 100 个对象的列表，一次性丢给仓储层执行批量插入 (Bulk Insert)
+        await chunk_repo.bulk_add(chunks_to_insert)
+        # 4. 统一提交事务，保证删除、更新、插入要么全部成功，要么全部失败
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：文档的全量重建（Full Rebuild）。
+# 【业务场景】这是增量更新时的“兜底方案”。如果发现文档里有重复的 Hash（无法准确增量比对），
+# 或者系统发生异常，就直接放弃增量，把旧的文本块全删了，重新算一遍所有向量并重新插入。
+# =====================================================================
+async def _run_full_rebuild(
+        document_id: UUID,
+        task_id: UUID,
+        new_chunks: list[LangChainDocument],
+) -> None:
+    """hash 冲突场景的兜底：清空旧 chunks，全量 embedding 后写入。"""
+    # 1. 设置进度条的总数（也就是最新切分出来的文本块总数）
+    await _set_task_total(task_id, len(new_chunks))
+
+    # 2. 对所有的文本块进行向量化。这会自动按批次跑，并且每跑完一批会去更新数据库里的 progress_done
+    embeddings = await _embed_with_progress(
+        [c.page_content for c in new_chunks], task_id
+    )
+
+    # 3. 开启独立数据库会话，准备执行“先删后插”的重建操作
+    async with AsyncSessionLocal() as session:
+        chunk_repo = DocumentChunkRepository(session)
+
+        # 4. 【清空旧数据】把该文档在数据库里原先存的所有文本块数据全部删掉
+        await chunk_repo.delete_by_document(document_id)
+
+        # 5. 【批量插入新数据】将最新的文本块和刚算好的向量配对，组装成实体批量插入
+        await chunk_repo.bulk_add(
+            [
+                _make_chunk(document_id, c, vec)
+                # strict=True：防呆设计，确保文本块数量和向量数量严格一致，防止数据错位
+                for c, vec in zip(new_chunks, embeddings, strict=True)
+            ]
+        )
+        # 6. 提交事务，让删除和插入同时生效
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：更新任务的总进度数值（用于计算百分比）。
+# =====================================================================
+async def _set_task_total(task_id: UUID, total: int) -> None:
+    async with AsyncSessionLocal() as session:
+        repo = IngestionTaskRepository(session)
+        # 调用仓储层设置总进度
+        await repo.set_progress_total(task_id, total)
+        # 提交事务落盘
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：增加任务的已完成进度数值。
+# =====================================================================
+async def _increment_task_progress(task_id: UUID, delta: int) -> None:
+    async with AsyncSessionLocal() as session:
+        repo = IngestionTaskRepository(session)
+        # 调用仓储层，把已完成数（progress_done）加上本次处理的批次数量
+        await repo.increment_progress(task_id, delta)
+        # 提交事务落盘
+        await session.commit()
 
 
 # =====================================================================

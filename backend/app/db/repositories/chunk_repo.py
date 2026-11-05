@@ -309,6 +309,48 @@ class DocumentChunkRepository:
         return [(chunk, float(rank)) for chunk, rank in rows]
 
 
+    # =====================================================================
+    # 方法作用：根据一组 chunk_id，批量删除数据库中对应的文档块。
+    # 【业务场景】在进行文档“增量重建（reindex）”时，用来清理那些在最新文档中已经失效、被删掉的旧文本块。
+    # =====================================================================
+    async def delete_by_ids(self, chunk_ids: Sequence[UUID]) -> None:
+        """按 id 批量删除；增量索引「删除失效 chunks」用。"""
+        # 1. 防御性判断：如果传入的列表为空，直接返回，避免执行无意义的 DELETE SQL
+        if not chunk_ids:
+            return
+
+        # 2. 构建批量删除语句：
+        # - delete(DocumentChunk)：指定要删除的表模型
+        # - .where(DocumentChunk.id.in_(list(chunk_ids)))：利用 SQL 的 IN 语法，一次性删掉匹配的所有 ID
+        stmt = delete(DocumentChunk).where(DocumentChunk.id.in_(list(chunk_ids)))
+
+        # 3. 执行 SQL（这里没有 commit，事务提交由上层 Service 控制）
+        await self.session.execute(stmt)
+
+    # =====================================================================
+    # 方法作用：拉取某一篇文档下“所有的”文本块记录。
+    # 【业务场景】用于增量比对。把数据库里的旧数据全查出来，用来和最新切分的文本块做 Hash 比对。
+    # =====================================================================
+    async def list_all_by_document(self, document_id: UUID) -> list[DocumentChunk]:
+        """拉取一篇文档的全部 chunks。
+
+        增量索引比对旧 chunk_hash 用；文档 chunks 数量上限受 splitter 控制
+        （单文档 50MB -> 数百条 chunk 量级），一次性加载内存可承受。
+        """
+        # 1. 构建查询语句
+        stmt = (
+            select(DocumentChunk)
+            # 过滤条件：属于指定的文档
+            .where(DocumentChunk.document_id == document_id)
+            # 【非常重要】按 chunk_index 升序排列。
+            # 因为后续需要按顺序比对文本内容或重建索引，顺序绝对不能乱
+            .order_by(DocumentChunk.chunk_index.asc())
+        )
+
+        # 2. 执行查询，提取出纯 ORM 实体对象列表并返回
+        return list((await self.session.execute(stmt)).scalars().all())
+
+
 # 定义工具函数：根据前端传来的过滤条件，动态生成 SQLAlchemy 的 WHERE 查询子句列表。
 # 参数 filters：领域模型中的不可变过滤对象（可能为 None，表示用户没有选任何额外过滤条件）。
 def _document_filter_conditions(filters: RetrievalFilter | None, *, permission_tags: list[str] | None = None) -> list:
