@@ -8,7 +8,8 @@
 - **react-markdown + remark-gfm**：渲染 Markdown 原文与问答回答，支持 GFM 表格、任务列表与代码块
 - **@microsoft/fetch-event-source**：消费 FastAPI 的 SSE 流式问答
 - **openapi-typescript**：从后端 OpenAPI 文档生成精确的接口类型
-- **openapi-fetch**：基于生成类型构建类型安全的 API 客户端
+- **framer-motion**：仅用于数据看板的共享布局、弹簧数字与 Dock 放大动效
+- 原生 CSS 变量设计系统（暖桃 / 铜 / 奶油液态玻璃），Manrope 可变字体
 - Oxlint 静态检查
 
 ## 快速开始
@@ -20,18 +21,24 @@
 cd ..\backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 
-# 2. 回到前端目录安装依赖
+# 2. 启动 Celery Worker（另一个终端；Windows 使用 solo pool）
+cd ..\backend
+.\.venv\Scripts\python.exe -m celery -A app.celery_app worker --loglevel=info --pool=solo
+
+# 3. 回到前端目录安装依赖
 cd ..\frontend
 npm install
 
-# 3. 从正在运行的后端生成 API 类型（需要 backend 已启动）
+# 4. 从正在运行的后端生成 API 类型（需要 backend 已启动）
 npm run gen:api
 
-# 4. 启动开发服务器（默认 http://localhost:5173）
+# 5. 启动开发服务器（默认 http://localhost:5173）
 npm run dev
 ```
 
 后端启动后可以访问 `http://127.0.0.1:8000/docs` 查看 Swagger 文档。开发环境下 `/api` 请求由 Vite 代理到 `http://127.0.0.1:8000`，不涉及浏览器跨域。
+
+文档入库和重新索引依赖 Redis + Celery Worker。Worker 未启动时，前端仍会显示「排队中」的最新任务，但不会推进进度；语义缓存与限流也依赖 Redis。
 
 首次打开前端会进入登录页。数据库为空时后端会自动创建默认管理员，默认账号密码为 `admin / admin`，可通过后端 `.env` 的 `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD` 覆盖。登录成功后所有业务请求会自动携带 JWT。
 
@@ -53,15 +60,19 @@ npm run dev
 
 ### 知识数据看板
 
-- 液态玻璃风格首页，包含趋势、榜首知识源、AI 洞察与最近沉淀
-- 玻璃胶囊菜单、光标光斑 / 3D 倾斜、共享布局详情、液态周期筛选与放大 Dock
-- 日 / 周 / 月切换时数字平滑滚动、图表柱体插值，不刷新页面
-- 主模块可原位展开为详情，其余模块收起为底部玻璃缩略条
+- 液态玻璃风格首页，包含知识脉搏、知识域趋势、洞察、榜首知识源、AI 洞察与最近沉淀
+- 玻璃胶囊菜单、指标卡 3D 倾斜、共享布局详情、液态周期筛选与放大 Dock
+- 日 / 周 / 月切换时数字弹簧滚动、趋势条平滑插值，不刷新页面
+- 模块可原位展开为详情（Esc 返回），其余模块收起为缩略条
+- **真实数据**：文档总数、可检索数、失败数与最近沉淀来自 `GET /api/documents`，健康光球来自 `GET /api/health` 与 `/api/health/db`，每 30 秒刷新
+- **演示数据**：后端没有看板聚合接口，问答量、命中率、趋势、洞察等为 `src/pages/dashboard/dashboardData.ts` 中的演示数据，界面以「演示数据」标注
 
 ### 文档库
 
 - 上传 PDF、DOCX、PPTX、XLSX、Markdown、HTML，单文件上限 50 MB
-- 文档以知识卡片形式展示：首页缩略图、文件类型、状态、大小和更新时间
+- 文档以知识卡片形式展示：首页缩略图、文件类型、状态、大小、内容版本和更新时间
+- 展示最近一次 Celery 入库任务的排队 / 运行 / 失败状态与实时进度
+- 上传与重新索引后，列表每 3 秒轮询任务进度
 - 缩略图加载失败或后端尚未生成时，自动回退到带文件类型的渐变占位图
 - 支持重命名文档：固定扩展名，校验空白名称、长度、非法字符
 - 重命名弹窗可同时上传缩略图：支持 PDF、JPG、JPEG、PNG、WebP，最大 10 MB
@@ -75,14 +86,18 @@ npm run dev
 - **Markdown 预览**：拉取原始 `.md` 文件，由 `react-markdown` + `remark-gfm` 渲染
 - **PDF / HTML 预览**：使用 iframe；HTML 在沙箱中运行，脚本不会执行
 - **DOCX / PPTX / XLSX**：浏览器无法内联渲染，提供下载入口
-- 展示文件大小、状态、哈希和上传/更新时间
+- 展示文件大小、状态、哈希、内容版本和上传/更新时间
+- **入库任务卡片**：任务类型、状态、进度条、重试次数、起止时间与失败原因
+- **上传新版本 / 增量重建**：管理员可上传同 MIME 的新文件；后端按 `chunk_hash` 对齐，仅重新向量化变化 chunk，成功后版本号 +1
 - **文本块**：查看切分统计、分页列表、chunk 摘要及完整内容
 - 下载原始文件、重新处理失败文档、删除文档（带二次确认）
 
 ### 知识问答
 
 - 基于已入库文档的 RAG 问答，回答通过 **SSE** 流式返回
+- **语义缓存**：命中时消息头部展示「语义缓存 · 极速响应」，跳过查询路由、Agent 决策和 LLM 生成；历史消息同样保留该标记
 - 支持 `message_start`、`query_route`、`agent_steps`、`citations`、`token`、`verify_result`、`message_end`、`error` 事件
+- 接口限流返回 429 时统一展示「请求过于频繁」提示
 - **Agentic RAG 决策轨迹**：逐轮展示 `initial` / `proceed` / `rewrite_query` / `switch_route` / `refuse` 动作、决策原因、实际 Query、召回数与 Top 语义相似度
 - 支持 `original` / `rewrite` / `hyde` / `multi_query` / `rewrite_multi_query` 五种查询路由
 - 支持组合路由 `rewrite_multi_query`：先把口语化或依赖上下文的问题改写为完整问题，再基于改写结果扩展多路子查询
@@ -129,12 +144,13 @@ npm run dev
 | 权限管理 | `PUT` | `/api/users/{id}/roles` | 全量替换用户角色（管理员） |
 | 权限管理 | `DELETE` | `/api/users/{id}` | 删除用户（管理员，不能删除自己） |
 | 文档库 | `GET` | `/api/documents` | 分页、按状态筛选文档 |
-| 文档库 | `POST` | `/api/documents` | 上传文档（multipart/form-data） |
+| 文档库 | `POST` | `/api/documents` | 上传文档（multipart/form-data，Celery 异步入库） |
 | 文档库 | `PATCH` | `/api/documents/{id}` | 重命名文档（body: `{"name": "新名称.ext"}`） |
 | 文档库 | `PATCH` | `/api/documents/{id}/permission-tags` | 修改文档可见范围标签（管理员） |
 | 文档库 | `GET` | `/api/documents/{id}/thumbnail` | 首页缩略图（WebP） |
 | 文档库 | `PUT` | `/api/documents/{id}/thumbnail` | 上传/替换缩略图（管理员，multipart/form-data） |
-| 文档详情 | `GET` | `/api/documents/{id}` | 文档详情与状态轮询 |
+| 文档详情 | `GET` | `/api/documents/{id}` | 文档详情、内容版本与最新入库任务 |
+| 文档详情 | `POST` | `/api/documents/{id}/reindex` | 上传新版本并增量重建（管理员，multipart/form-data） |
 | 文档详情 | `DELETE` | `/api/documents/{id}` | 删除文档 |
 | 文档详情 | `POST` | `/api/documents/{id}/retry` | 重试失败文档 |
 | 文档详情 | `GET` | `/api/documents/{id}/file?download=0` | 原始文件预览 |

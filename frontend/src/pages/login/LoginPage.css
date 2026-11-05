@@ -1,0 +1,136 @@
+.login {
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  width: var(--container);
+  margin: 0 auto;
+}
+
+.login__top {
+  padding: 28px 0 0;
+}
+
+.login__main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 440px);
+  gap: 56px;
+  align-items: center;
+  padding: 48px 0;
+  animation: page-in 0.5s var(--ease-out) both;
+}
+
+.login__intro {
+  min-width: 0;
+}
+
+.login__features {
+  display: grid;
+  gap: 12px;
+  max-width: 520px;
+  margin: 34px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.login__features li {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+}
+
+.login__features strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.login__features span {
+  color: var(--text-muted);
+}
+
+.login__card {
+  display: grid;
+  gap: 22px;
+  padding: 32px;
+}
+
+.login__card-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.login__card-head p {
+  margin-top: 4px;
+  font-size: 12.5px;
+}
+
+.login__card-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--coffee);
+  color: var(--accent-glow);
+  box-shadow: var(--shadow-dark);
+}
+
+.login__form {
+  display: grid;
+  gap: 16px;
+}
+
+.login__password {
+  position: relative;
+}
+
+.login__password .input {
+  padding-right: 48px;
+}
+
+.login__toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
+.login__hint {
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.login__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 20px;
+  padding: 20px 0 28px;
+  border-top: 1px solid rgba(255, 255, 255, 0.42);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+@media (max-width: 860px) {
+  .login__main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 36px;
+    padding: 32px 0;
+  }
+
+  .login__features {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .login__card {
+    padding: 24px 20px;
+  }
+}

@@ -1,0 +1,73 @@
+:root {
+  --bg: #e7d0c1;
+  --bg-peach: #e4c0a6;
+  --bg-rose: #d4b8ac;
+  --bg-cream: #ebd7cc;
+
+  --surface: rgba(255, 255, 255, 0.48);
+  --surface-strong: rgba(255, 255, 255, 0.66);
+  --surface-solid: #fffaf6;
+
+  --text: #5b3b2c;
+  --text-strong: #2f1a11;
+  --text-muted: #7f5e4e;
+  --text-faint: #9d7d6d;
+
+  --border: rgba(255, 255, 255, 0.46);
+  --border-strong: rgba(255, 255, 255, 0.64);
+
+  --accent: #b66d44;
+  --accent-strong: #94502e;
+  --accent-soft: rgba(182, 109, 68, 0.11);
+  --accent-glow: #e7a471;
+  --on-accent: #fff8f2;
+
+  --success: #3f7259;
+  --success-soft: rgba(63, 114, 89, 0.1);
+  --danger: #9e4234;
+  --danger-soft: rgba(158, 66, 52, 0.09);
+  --on-danger: #fff8f6;
+  --warning: #91672b;
+  --warning-soft: rgba(145, 103, 43, 0.1);
+  --pending: #796b73;
+  --pending-soft: rgba(121, 107, 115, 0.09);
+  --info: #6d667e;
+  --info-soft: rgba(109, 102, 126, 0.09);
+
+  --glass-dark: #1b1b19;
+  --coffee: #3f1f11;
+  --coffee-soft: #7a462d;
+  --on-dark: #f9eadf;
+  --on-dark-muted: rgba(249, 234, 223, 0.62);
+
+  --font-sans: "Manrope Variable", "HarmonyOS Sans SC", "PingFang SC",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas,
+    monospace;
+
+  --radius-sm: 9px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 28px;
+
+  --shadow-soft:
+    0 20px 48px -32px rgba(80, 38, 22, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  --shadow-strong:
+    0 38px 90px -48px rgba(80, 38, 22, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-glass:
+    0 28px 62px -44px rgba(80, 38, 22, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  --shadow-dark: 0 28px 58px -34px rgba(27, 27, 25, 0.85);
+
+  --ease-out: cubic-bezier(0.22, 0.8, 0.22, 1);
+  --ease-spring: cubic-bezier(0.22, 0.9, 0.2, 1);
+
+  --container: min(1240px, calc(100% - 48px));
+  --focus-ring: 0 0 0 2px var(--surface-solid), 0 0 0 4px var(--accent);
+
+  --z-topbar: 40;
+  --z-popover: 60;
+  --z-toast: 90;
+}

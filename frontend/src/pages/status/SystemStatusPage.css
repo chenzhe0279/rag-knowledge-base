@@ -1,0 +1,122 @@
+.status-summary {
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+}
+
+.status-summary__value {
+  font-size: 54px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.status-summary__value small {
+  margin-left: 6px;
+  font-size: 18px;
+  color: var(--on-dark-muted);
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.status-card {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 24px;
+  transition: transform 0.22s var(--ease-out);
+}
+
+.status-card:hover {
+  transform: translateY(-4px);
+}
+
+.status-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.status-card__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.status-card[data-tone="success"] .status-card__icon {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.status-card[data-tone="danger"] .status-card__icon {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.status-card[data-tone="warning"] .status-card__icon {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.status-card__title {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.status-card__title h2 {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.status-card__title .mono {
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.status-card__desc {
+  font-size: 12.5px;
+}
+
+.status-card__facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.status-card__detail {
+  min-height: 44px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.42);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.status-card .btn {
+  justify-self: start;
+}
+
+@media (max-width: 980px) {
+  .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

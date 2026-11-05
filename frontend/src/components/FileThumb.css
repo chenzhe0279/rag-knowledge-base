@@ -1,0 +1,116 @@
+.file-thumb {
+  --kind-a: #d8c3b4;
+  --kind-b: #b9a59c;
+  --kind-ink: rgba(63, 31, 17, 0.5);
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.5), transparent 46%),
+    linear-gradient(150deg, var(--kind-a), var(--kind-b));
+}
+
+.file-thumb[data-kind="pdf"] {
+  --kind-a: #dcab90;
+  --kind-b: #b9714f;
+}
+
+.file-thumb[data-kind="docx"] {
+  --kind-a: #cdc3c0;
+  --kind-b: #8f8fa3;
+}
+
+.file-thumb[data-kind="pptx"] {
+  --kind-a: #e3b49c;
+  --kind-b: #c47f69;
+}
+
+.file-thumb[data-kind="xlsx"] {
+  --kind-a: #cfcab4;
+  --kind-b: #8b9a83;
+}
+
+.file-thumb[data-kind="markdown"] {
+  --kind-a: #d6c1b1;
+  --kind-b: #b8a1a6;
+}
+
+.file-thumb[data-kind="html"] {
+  --kind-a: #e0c39d;
+  --kind-b: #b88d5f;
+}
+
+.file-thumb--cover {
+  aspect-ratio: 16 / 10;
+}
+
+.file-thumb--tile {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border-radius: 18px;
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+.file-thumb__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.file-thumb__placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+}
+
+.file-thumb__kind {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: 0.04em;
+  color: var(--kind-ink);
+}
+
+.file-thumb--tile .file-thumb__kind {
+  font-size: 12px;
+}
+
+.file-thumb__lines {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+}
+
+.file-thumb__lines span {
+  display: block;
+  width: 88px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.file-thumb__lines span:nth-child(2) {
+  width: 64px;
+}
+
+.file-thumb__lines span:nth-child(3) {
+  width: 40px;
+}
+
+.file-thumb__chip {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(255, 250, 246, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+}

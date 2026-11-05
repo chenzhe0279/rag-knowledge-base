@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from fastapi.responses import EventSourceResponse
 from fastapi.sse import ServerSentEvent
 
-from app.api.deps import DbSession, CurrentUser
+from app.api.deps import DbSession, CurrentUser, RateLimited
 from app.api.schemas.chat import (
     ChatRequest,
     ConversationCreate,
@@ -13,7 +13,6 @@ from app.api.schemas.chat import (
     ConversationRead,
     MessageRead,
 )
-from app.core.rate_limiter import RateLimiter
 from app.services.chat_service import ChatService
 from fastapi import Query, Response
 from app.api.schemas.chat import (
@@ -63,7 +62,7 @@ async def get_conversation(conversation_id: UUID, user: CurrentUser, session: Db
     # 指定响应类为 EventSourceResponse，告诉 FastAPI 这是一个 SSE（Server-Sent Events）流式响应
     response_class=EventSourceResponse,
 )
-async def stream_chat(_rate_limit: RateLimiter, conversation_id: UUID, payload: ChatRequest, user: CurrentUser, session: DbSession,) -> AsyncIterable[ServerSentEvent]:
+async def stream_chat(_rate_limit: RateLimited, conversation_id: UUID, payload: ChatRequest, user: CurrentUser, session: DbSession,) -> AsyncIterable[ServerSentEvent]:
     """SSE 流式问答。
 
     事件协议：message_start -> citations -> token...（多次） -> message_end；

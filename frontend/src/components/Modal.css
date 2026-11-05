@@ -1,0 +1,142 @@
+.modal {
+  width: min(560px, calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100svh - 48px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  overflow: visible;
+}
+
+.modal--sm {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.modal--lg {
+  width: min(880px, calc(100vw - 48px));
+}
+
+.modal::backdrop {
+  background: rgba(63, 31, 17, 0.28);
+  backdrop-filter: blur(11px);
+  -webkit-backdrop-filter: blur(11px);
+  animation: modal-fade 0.24s ease both;
+}
+
+.modal[open] .modal__surface {
+  animation: modal-in 0.26s var(--ease-spring) both;
+}
+
+.modal__surface {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100svh - 48px);
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(255, 255, 255, 0.9), transparent 50%),
+    linear-gradient(150deg, rgba(255, 250, 246, 0.96), rgba(246, 230, 219, 0.94));
+  box-shadow:
+    0 50px 100px -40px rgba(63, 31, 17, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+}
+
+.modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 24px 0 28px;
+}
+
+.modal__heading {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modal__title {
+  font-size: 22px;
+  font-weight: 620;
+  letter-spacing: -0.04em;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.modal__desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.modal__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 28px 24px;
+}
+
+.modal__body > * + * {
+  margin-top: 16px;
+}
+
+.modal__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 28px 22px;
+  border-top: 1px solid rgba(91, 59, 44, 0.08);
+  background: rgba(255, 255, 255, 0.3);
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes modal-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  .modal,
+  .modal--sm,
+  .modal--lg {
+    width: calc(100vw - 32px);
+  }
+
+  .modal__header {
+    padding: 20px 18px 0 20px;
+  }
+
+  .modal__body {
+    padding: 18px 20px 20px;
+  }
+
+  .modal__footer {
+    padding: 14px 20px 18px;
+  }
+
+  .modal__footer .btn {
+    flex: 1 1 auto;
+  }
+}
+
+.confirm-body {
+  display: grid;
+  gap: 14px;
+}

@@ -1,0 +1,230 @@
+.account-menu {
+  position: relative;
+  flex: none;
+}
+
+.account-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.44);
+  list-style: none;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    transform 0.18s ease;
+}
+
+.account-menu__trigger::-webkit-details-marker {
+  display: none;
+}
+
+.account-menu__trigger:hover {
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.account-menu__trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.account-menu__avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 50%;
+  background: linear-gradient(150deg, #7a462d, var(--coffee));
+  color: var(--on-dark);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.account-menu__avatar--lg {
+  width: 44px;
+  height: 44px;
+  font-size: 16px;
+  border-radius: 14px;
+}
+
+.account-menu__who {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.account-menu__name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.account-menu__role {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+
+.account-menu__chevron {
+  color: var(--text-faint);
+  transition: transform 0.2s var(--ease-out);
+}
+
+.account-menu[open] .account-menu__chevron {
+  transform: rotate(180deg);
+}
+
+.account-menu__popover {
+  position: absolute;
+  z-index: var(--z-popover);
+  top: calc(100% + 10px);
+  right: 0;
+  width: 290px;
+  padding: 16px;
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse at 10% 0%, rgba(255, 255, 255, 0.7), transparent 50%),
+    rgba(255, 248, 242, 0.86);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-strong);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  animation: popover-in 0.22s var(--ease-spring) both;
+  transform-origin: top right;
+}
+
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.account-menu__profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(91, 59, 44, 0.1);
+}
+
+.account-menu__profile-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.account-menu__profile-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.account-menu__profile-text span {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.account-menu__facts {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.account-menu__facts div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.account-menu__facts dt {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.account-menu__facts dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-strong);
+  word-break: break-word;
+}
+
+.account-menu__actions {
+  display: grid;
+  gap: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(91, 59, 44, 0.1);
+}
+
+.account-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+
+.account-menu__item:hover {
+  background: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+}
+
+.account-menu__item--danger {
+  color: var(--danger);
+}
+
+.account-menu__item--danger:hover {
+  background: var(--danger-soft);
+}
+
+@media (max-width: 1080px) {
+  .account-menu__who,
+  .account-menu__chevron {
+    display: none;
+  }
+
+  .account-menu__trigger {
+    padding: 4px;
+  }
+}
+
+@media (max-width: 640px) {
+  .account-menu__popover {
+    width: min(290px, calc(100vw - 32px));
+  }
+}

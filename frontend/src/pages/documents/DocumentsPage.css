@@ -1,0 +1,170 @@
+.docs-count {
+  display: grid;
+  gap: 10px;
+  padding: 24px;
+}
+
+.docs-count__value {
+  font-size: 58px;
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.docs-count__label {
+  font-size: 12.5px;
+  color: var(--on-dark-muted);
+}
+
+.docs-count .btn {
+  margin-top: 6px;
+}
+
+.docs-filter {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.docs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.doc-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 12px;
+  transition:
+    transform 0.22s var(--ease-out),
+    box-shadow 0.22s var(--ease-out),
+    background-color 0.22s ease;
+}
+
+.doc-card:hover {
+  transform: translateY(-4px);
+  background-color: rgba(255, 255, 255, 0.26);
+  box-shadow: var(--shadow-strong);
+}
+
+.doc-card:focus-within {
+  box-shadow: var(--shadow-strong), var(--focus-ring);
+}
+
+/* 整卡可点击：覆盖层链接位于内容之下，独立按钮浮在其上 */
+.doc-card__link {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.doc-card__link:focus-visible {
+  outline: none;
+}
+
+.doc-card__cover {
+  position: relative;
+}
+
+.doc-card__status {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(255, 250, 246, 0.86);
+}
+
+.doc-card__skeleton-cover {
+  aspect-ratio: 16 / 10;
+  border-radius: 16px;
+}
+
+.doc-card__body {
+  display: grid;
+  gap: 8px;
+  padding: 14px 6px 6px;
+  min-width: 0;
+}
+
+.doc-card__name {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  word-break: break-word;
+}
+
+.doc-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.doc-card__scope {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doc-card__task {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.doc-card__task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.doc-card__error {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--danger);
+}
+
+.doc-card__rename {
+  position: absolute;
+  z-index: 2;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 250, 246, 0.86);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.doc-card:hover .doc-card__rename,
+.doc-card__rename:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .doc-card__rename {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 1080px) {
+  .docs-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .docs-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

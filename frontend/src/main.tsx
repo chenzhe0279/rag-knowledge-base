@@ -1,9 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
+import '@fontsource-variable/manrope'
+import './styles/tokens.css'
+import './styles/base.css'
+import { App } from './app/App'
 
-createRoot(document.getElementById('root')!).render(
+const container = document.getElementById('root')
+if (!container) throw new Error('缺少 #root 挂载节点')
+
+createRoot(container).render(
   <StrictMode>
     <App />
   </StrictMode>,
