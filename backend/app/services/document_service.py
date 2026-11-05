@@ -5,11 +5,11 @@ from uuid import UUID
 from app.ingestion.tasks import ingest_document_task
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from app.ingestion.tasks import reindex_document_task
 from app.core.config import settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logger import get_logger
-from app.db.models import Document, DocumentChunk, DocumentStatus, IngestionTaskType
+from app.db.models import Document, DocumentChunk, DocumentStatus, IngestionTaskType, IngestionTask
 from app.db.repositories.chunk_repo import (
     ChunkStats,
     DocumentChunkRepository,
@@ -526,3 +526,91 @@ class DocumentService:
 
         # 15. 返回更新后的文档对象。
         return document
+
+
+    # =====================================================================
+    # 方法作用：用新文件替换旧文档，并触发“增量重建（Reindex）”任务。
+    # 【业务规则】
+    # 1. 状态校验：只允许在 READY(就绪) 或 FAILED(失败) 状态下重新索引，防止和正在跑的 ingest 抢资源。
+    # 2. 类型校验：新文件 MIME 类型必须和原文件一致（PDF 不能换成 Markdown）。
+    # 3. 前置覆盖：新文件会覆盖对象存储中的同一个 object_key。
+    # 4. 版本号：version+1 由 Worker 在重建成功后才提交，防止失败时前端看到版本变了但内容没变。
+    # =====================================================================
+    async def reindex(self, document_id: UUID, file: UploadFile,) -> Document:
+        """用新文件替换原文档并触发增量重建。"""
+
+        # ================= 阶段 1：前置校验 =================
+        # 查询数据库
+        doc = await self.repo.get_by_id(document_id)
+        if doc is None:
+            raise NotFoundError("文档不存在")
+
+        # 校验状态：如果在解析中或索引中，说明后台正在跑，不能允许重新触发
+        if doc.status not in {DocumentStatus.READY, DocumentStatus.FAILED}:
+            raise ValidationError("文档处理中，请等待完成或失败后再重新索引")
+
+        # 解析新文件的 MIME 类型和后缀，并校验是否与原文档一致
+        mime_type, suffix = _resolve_mime_and_suffix(file)
+        if mime_type != doc.mime_type:
+            raise ValidationError(
+                f"新版本文件类型必须与原文档一致（当前为 {doc.mime_type}）"
+            )
+
+        # ================= 阶段 2：文件内容校验 =================
+        # 读取文件内容并校验大小
+        content = await file.read()
+        max_bytes = settings.upload_max_size_mb * 1024 * 1024
+        if len(content) == 0:
+            raise ValidationError("上传文件为空")
+        if len(content) > max_bytes:
+            raise ValidationError(f"文件超过 {settings.upload_max_size_mb} MB 上限")
+
+        # 【核心省钱机制】计算新文件的 Hash 值，如果和旧的一模一样，直接拒绝
+        new_hash = hashlib.sha256(content).hexdigest()
+        if new_hash == doc.file_hash:
+            # 内容完全一致没有重建必要，避免浪费 embedding 配额
+            raise ValidationError("文件内容与现有版本一致，无需重新索引")
+
+        # ================= 阶段 3：上传新文件到对象存储 =================
+        # 将新文件内容上传到 COS（它会自动覆盖同名的 object_key）
+        new_object_key = await self.file_service.upload(
+            content=content,
+            file_hash=new_hash,
+            suffix=suffix,
+            mime_type=mime_type,
+        )
+
+        # ================= 阶段 4：更新数据库文档记录 =================
+        # 将最新的文件属性（Hash、大小、存储路径）更新到文档对象上
+        doc.file_hash = new_hash
+        doc.size = len(content)
+        doc.cos_object_key = new_object_key
+        doc.cos_bucket = self.file_service.bucket
+        doc.cos_region = self.file_service.region
+        # 状态设为解析中，清空历史错误信息
+        doc.status = DocumentStatus.PARSING
+        doc.error_message = None
+        # 如果前端传了新文件名，顺便更新（通常同名替换不需要）
+        if file.filename:
+            doc.name = file.filename
+
+        # ================= 阶段 5：创建任务并派发 =================
+        # 在数据库里创建一条类型为 REINDEX 的任务记录
+        task = await self.task_repo.create(doc.id, IngestionTaskType.REINDEX)
+
+        # 必须先 commit，后台 Worker 才能查到这些刚刚更新的数据
+        await self.session.commit()
+        await self.session.refresh(doc)
+
+        # 将耗时任务丢给 Celery 异步执行
+        reindex_document_task.delay(str(doc.id), str(task.id))
+        logger.info("document reindex scheduled: id=%s", document_id)
+
+        # 返回更新了状态的 doc 对象给前端
+        return doc
+
+    # =====================================================================
+    # 方法作用：获取指定文档最近一次的处理任务（用于前端展示进度条或错误）。
+    # =====================================================================
+    async def get_latest_task(self, document_id: UUID) -> IngestionTask | None:
+        return await self.task_repo.get_latest_by_document(document_id)
