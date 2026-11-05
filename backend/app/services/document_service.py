@@ -2,19 +2,20 @@ import hashlib
 from pathlib import PurePath
 from typing import Sequence
 from uuid import UUID
-
+from app.ingestion.tasks import ingest_document_task
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logger import get_logger
-from app.db.models import Document, DocumentChunk, DocumentStatus
+from app.db.models import Document, DocumentChunk, DocumentStatus, IngestionTaskType
 from app.db.repositories.chunk_repo import (
     ChunkStats,
     DocumentChunkRepository,
 )
 from app.db.repositories.document_repo import DocumentRepository
+from app.db.repositories.ingestion_task_repo import IngestionTaskRepository
 from app.ingestion.pipeline import ingest_document
 from app.services.role_service import _normalize_tags
 from app.storage.file_service import FileService, get_file_service
@@ -111,11 +112,11 @@ class DocumentService:
         # 初始化文档仓储和文档块仓储，复用同一个 session 以保证事务一致性
         self.repo = DocumentRepository(session)
         self.chunk_repo = DocumentChunkRepository(session)
+        self.task_repo = IngestionTaskRepository(session)
         # 依赖注入：如果外部传了就用外部的，否则用默认的
         self.file_service = file_service or get_file_service()
 
-    async def upload(self, file: UploadFile, background_tasks: BackgroundTasks,
-                     *, created_by: UUID | None = None, permission_tags: Sequence[str] | None = None,) -> Document:
+    async def upload(self, file: UploadFile, *, created_by: UUID | None = None, permission_tags: Sequence[str] | None = None,) -> Document:
         """
         处理文档上传的核心业务逻辑。
         """
@@ -177,6 +178,10 @@ class DocumentService:
         # 2. 将对象加入当前 SQLAlchemy 的 session 会话中（此时还在内存，没有落库）
         await self.repo.add(document)
 
+        # 调用入库任务仓储层（Repository）的 create 方法，在数据库中创建一条新的任务记录。
+        # 执行成功后，返回的 task 对象里已经包含了数据库自动生成的主键 ID、状态（PENDING）和创建时间。
+        task = await self.task_repo.create(document.id, IngestionTaskType.INGEST)
+
         # 3. 提交事务，将这条记录真正写入数据库
         await self.session.commit()
 
@@ -186,10 +191,10 @@ class DocumentService:
         # 保证下面能正确获取到 document.id。
         await self.session.refresh(document)
 
-        # 5. 将耗时的文档解析任务推送到 FastAPI 的后台任务执行。
-        # 【核心前置条件】：推送到后台任务前必须 commit，确保后台的 ingest pipeline 用独立的新 session 也能查到这条记录。
-        # 如果不 commit 就丢给后台，后台任务去数据库查文档时，会因为查不到而报错。
-        background_tasks.add_task(ingest_document, document.id)
+        # 核心纪律：必须在数据库 session.commit() 之后，才能调用 Celery 的 delay 派发任务。
+        # 因为 Celery Worker 是另一个独立的进程，它执行任务时会开启自己独立的数据库 Session。
+        # 只有主线程 commit 成功了，Worker 那边才能查到刚刚插入的 document 和 task 记录，否则会报“查无此数据”。
+        ingest_document_task.delay(str(document.id), str(task.id))
 
         # 6. 将生成的文档信息返回给前端（此时状态为 UPLOADING，前端可以凭 ID 轮询状态）
         return document
@@ -289,7 +294,7 @@ class DocumentService:
         # 7. 记录操作日志，方便追踪和审计
         logger.info("document deleted: id=%s", document_id)
 
-    async def retry(self, document_id: UUID, background_tasks: BackgroundTasks) -> Document:
+    async def retry(self, document_id: UUID) -> Document:
         """从 failed 重新触发 ingest（文档解析入库流程）。"""
 
         # 1. 先查询数据库，确认文档是否存在
@@ -313,16 +318,20 @@ class DocumentService:
         # 将状态改回 UPLOADING，清空之前的报错信息，相当于让文档“格式化”回到刚上传时的初始状态。
         doc.status = DocumentStatus.UPLOADING
         doc.error_message = None
-
+        task = await self.task_repo.create(doc.id, IngestionTaskType.INGEST)
         # 5. 提交事务，将状态变更和清场操作真正落库
         await self.session.commit()
 
         # 6. 刷新对象状态，确保获取到最新的数据库数据（如更新时间等）
         await self.session.refresh(doc)
 
-        # 7. 将耗时的解析任务再次推入 FastAPI 的后台任务队列。
-        # 后台任务会使用新的独立的 Session 去执行 ingest_document 流程。
-        background_tasks.add_task(ingest_document, doc.id)
+        # 调用 Celery 任务的 .delay() 方法，将任务异步派发（发送）到 Redis 消息队列中。
+        # - ingest_document_task：是在 tasks.py 中通过 @celery_app.task 定义的 Celery 任务函数。
+        # - str(doc.id) 和 str(task.id)：将 UUID 对象转换为字符串。
+        #   原因：Celery 底层需要把参数序列化为 JSON 格式通过网络传输，而 JSON 原生不支持 UUID 类型，直接传对象会报错。
+        #   （Worker 进程接收到字符串后，会再次用 UUID() 转换回对象）。
+        # 执行这行代码后，请求会立刻继续往下走（不会阻塞等待），而真正的处理会在后台 Worker 中进行。
+        ingest_document_task.delay(str(doc.id), str(task.id))
 
         # 8. 记录重试日志，返回最新的文档对象给前端展示
         logger.info("document retry scheduled: id=%s", document_id)

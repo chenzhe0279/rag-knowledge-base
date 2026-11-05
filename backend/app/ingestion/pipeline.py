@@ -1,9 +1,10 @@
 from uuid import UUID
-
+from langchain_core.documents import Document as LangChainDocument
 from app.core.logger import get_logger
 from app.db.models import DocumentChunk, DocumentStatus
 from app.db.repositories.chunk_repo import DocumentChunkRepository
 from app.db.repositories.document_repo import DocumentRepository
+from app.db.repositories.ingestion_task_repo import IngestionTaskRepository
 from app.db.session import AsyncSessionLocal
 from app.ingestion import embedder, parser, splitter
 from app.retrieval.tokenizer import segment
@@ -214,3 +215,226 @@ async def ingest_document(document_id: UUID) -> None:
         # 更新状态为 FAILED。
         # 传入截断后的错误信息 `[:500]`，防止超出数据库字段长度限制或前端展示溢出。
         await _set_status(document_id, DocumentStatus.FAILED, error_message=message[:500])
+
+
+
+
+# =====================================================================
+# 方法作用：更新任务状态为“执行中（RUNNING）”。
+# 因为是在 Celery 后台任务中调用的，脱离了 FastAPI 的请求上下文，
+# 所以必须开启独立的数据库 Session，并手动 commit。
+# =====================================================================
+async def _mark_task(task_id: UUID, *, running: bool = False) -> None:
+    # 开启独立数据库会话
+    async with AsyncSessionLocal() as session:
+        # 实例化任务仓储层
+        repo = IngestionTaskRepository(session)
+        # 如果传入了 running=True，则执行标记为“运行中”的逻辑
+        if running:
+            await repo.mark_running(task_id)
+        # 提交事务，将状态更新落盘
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：更新任务状态为“失败（FAILED）”，并记录错误信息。
+# =====================================================================
+async def _mark_task_failed(task_id: UUID, error_message: str) -> None:
+    async with AsyncSessionLocal() as session:
+        repo = IngestionTaskRepository(session)
+        # 调用仓储层方法标记失败，并截断保留 500 字符的错误信息
+        await repo.mark_failed(task_id, error_message)
+        # 提交事务
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：更新任务状态为“成功（SUCCESS）”。
+# =====================================================================
+async def _mark_task_success(task_id: UUID) -> None:
+    async with AsyncSessionLocal() as session:
+        repo = IngestionTaskRepository(session)
+        # 调用仓储层方法标记成功，并记录完成时间
+        await repo.mark_success(task_id)
+        # 提交事务
+        await session.commit()
+
+
+# =====================================================================
+# 方法作用：将长文本列表分批（Batch）进行向量化（Embedding），并在每批完成后更新任务进度。
+# 这样前端轮询时，能看到进度条平滑地增长，而不是等所有文本都处理完才从 0 跳到 100。
+# =====================================================================
+async def _embed_with_progress(texts: list[str], task_id: UUID) -> list[list[float]]:
+    """按 EMBEDDING_BATCH_SIZE 分批 embedding，逐批写入任务进度。
+
+    LangChain `OpenAIEmbeddings.aembed_documents` 内部也会分批，但回调粒度藏在
+    SDK 里；这里手动分批是为了让 `progress_done` 跟着每个批次走，前端轮询有连续反馈。
+    """
+    # 延迟导入配置，避免循环依赖
+    from app.core.config import settings
+
+    # 防御性判断：如果传入的文本列表为空，直接返回空列表，避免发起无意义的 API 请求
+    if not texts:
+        return []
+
+    # 获取配置好的 Embedding 模型客户端（可能是 OpenAI，也可能是本地部署的模型）
+    embeddings_client = embedder.get_embeddings()
+
+    # 从配置读取批次大小。使用 max(1, ...) 兜底，防止配置写错成 0 或负数导致死循环
+    batch_size = max(1, settings.embedding_batch_size)
+
+    # 初始化一个结果列表，用于收集所有批次的向量结果
+    results: list[list[float]] = []
+
+    # 核心循环：使用 range 的步长（step）来实现分批切片
+    # 例如：batch_size 为 10，start 依次为 0, 10, 20...
+    for start in range(0, len(texts), batch_size):
+        # 切片获取当前批次的文本片段
+        batch = texts[start: start + batch_size]
+
+        # 调用大模型/Embedding 接口，将当前批次的文本转化为向量列表
+        vectors = await embeddings_client.aembed_documents(batch)
+
+        # 把当前批次算出的向量追加到总结果列表中
+        results.extend(vectors)
+
+        # 【关键步骤】调用外部的进度更新函数，把当前批次的数量累加到数据库里的 progress_done 字段上
+        await _increment_task_progress(task_id, len(batch))
+
+    # 所有批次处理完毕，返回完整的向量列表
+    return results
+
+
+# =====================================================================
+# 方法作用：文档首次入库（Ingest）的核心流水线。
+# 负责：下载文件 -> 解析 -> 切分 -> 分批生成向量（更新进度） -> 向量落库 -> 更新最终状态。
+# =====================================================================
+async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
+    """首次入库：全量解析 -> 切分 -> embedding -> 写库。"""
+
+    # 1. 记录开始日志，并把 Celery 任务状态标记为“运行中”
+    logger.info("ingest start: document_id=%s task_id=%s", document_id, task_id)
+    await _mark_task(task_id, running=True)
+
+    try:
+        # ================= 阶段 1：获取文档信息 =================
+        # 开启一个独立的数据库会话
+        async with AsyncSessionLocal() as session:
+            # 查询对应的文档记录
+            document = await DocumentRepository(session).get_by_id(document_id)
+
+            # 防御性判断：如果文档不存在（可能刚被用户删了），直接标记任务失败并退出
+            if document is None:
+                logger.warning("document not found, skip ingest: %s", document_id)
+                await _mark_task_failed(task_id, "文档不存在")
+                return
+
+            # 提取文件在对象存储（如阿里云 OSS / MinIO）中的路径和文件名
+            object_key = document.cos_object_key
+            filename = document.name
+
+        # ================= 阶段 2：下载与解析 =================
+        # 更新文档状态为“正在解析（PARSING）”，前端可以据此展示加载动画
+        await _set_status(document_id, DocumentStatus.PARSING)
+        # 从对象存储下载文件原始二进制数据
+        content = await get_file_service().download(object_key)
+        # 调用解析器，把 PDF/Word 转为纯文本
+        parsed = await parser.parse(filename, content)
+
+        # ================= 阶段 3：文本切分 =================
+        # 更新文档状态为“正在建立索引（INDEXING）”
+        await _set_status(document_id, DocumentStatus.INDEXING)
+        # 把长篇大论的纯文本，切分成一段段适合大模型处理的 chunks
+        chunks = splitter.split(parsed)
+
+        # 如果切分后一个字都没有，说明文档损坏或是空文件，抛出异常
+        if not chunks:
+            raise ValueError("切分后没有任何 chunk，请检查文档内容")
+
+        # ================= 阶段 4：向量化（Embedding） =================
+        # 把总共需要处理的 chunk 数量告诉数据库，用于计算进度百分比
+        await _set_task_total(task_id, len(chunks))
+        # 调用你之前看过的分批向量化函数（内部会按批次更新进度条）
+        embeddings = await _embed_with_progress(
+            [c.page_content for c in chunks], task_id
+        )
+
+        # ================= 阶段 5：向量落库 =================
+        # 再次开启独立会话，准备批量插入数据
+        async with AsyncSessionLocal() as session:
+            chunk_repo = DocumentChunkRepository(session)
+            # 批量插入：将文本块和对应的向量一一对应，转换成数据库实体
+            await chunk_repo.bulk_add(
+                # strict=True 确保 chunks 和 embeddings 的数量绝对一致，防止数据错位
+                [_make_chunk(document_id, c, vec) for c, vec in zip(chunks, embeddings, strict=True)]
+            )
+            # 提交事务，将数据落盘
+            await session.commit()
+
+        # ================= 阶段 6：完成收尾 =================
+        # 将文档状态更新为“就绪（READY）”，并清空历史错误信息
+        await _set_status(document_id, DocumentStatus.READY, error_message=None)
+        # 将 Celery 任务状态标记为成功
+        await _mark_task_success(task_id)
+        logger.info("ingest done: document_id=%s chunks=%d", document_id, len(chunks))
+
+    # ================= 异常兜底处理 =================
+    except Exception as exc:
+        # 记录详细报错堆栈
+        logger.exception("ingest failed: document_id=%s", document_id)
+        # 提取错误信息：如果是空字符串则用异常类名（如 ValueError）兜底
+        message = str(exc).strip() or exc.__class__.__name__
+        # 将文档标记为失败，并记录截断后的错误信息（前 500 字符）
+        await _set_status(document_id, DocumentStatus.FAILED, error_message=message[:500])
+        # 将 Celery 任务也标记为失败
+        await _mark_task_failed(task_id, message)
+
+
+# =====================================================================
+# 函数作用：组装数据实体。
+# 负责将 LangChain 切分出来的“文本块对象”以及“算好的向量”，
+# 转换成数据库 ORM 模型（DocumentChunk），准备批量落库。
+# =====================================================================
+def _make_chunk(document_id: UUID, chunk: LangChainDocument, embedding: list[float]) -> DocumentChunk:
+    # 实例化数据库实体对象并返回
+    return DocumentChunk(
+        # 1. 关联所属的文档 ID
+        document_id=document_id,
+        # 2. 提取文本正文内容
+        content=chunk.page_content,
+        # 3. 存入对应的高维向量
+        embedding=embedding,
+
+        # 4. 【安全提取】页码。可能存在也可能不存在，所以用 .get()，缺失则返回 None
+        page_no=chunk.metadata.get("page_no"),
+        # 5. 【安全提取】章节路径（如 "第一章/1.1节"），同样用 .get() 安全获取
+        section_path=chunk.metadata.get("section_path"),
+
+        # 6. 【强制提取】块索引。这是切分器必须生成的字段，如果缺失说明系统有 Bug，直接使用 [] 让其报错
+        chunk_index=chunk.metadata["chunk_index"],
+        # 7. 【强制提取】块的哈希值。用于后续增量更新（reindex）比对内容是否变化
+        chunk_hash=chunk.metadata["chunk_hash"],
+
+        # 8. 冗余快照：把整个原始 metadata 字典存下来（存为 JSONB），方便以后调试或展示完整信息
+        extra_metadata=chunk.metadata,
+    )
+
+
+
+# =====================================================================
+# 函数作用：首次入库的“同步入口”。
+# 因为 Celery Worker 是同步进程，而底层业务逻辑（_run_ingest）是异步的，
+# 所以用 asyncio.run() 启动一个独立的事件循环来执行它。
+# =====================================================================
+def run_ingest_sync(document_id: UUID, task_id: UUID) -> None:
+    # 运行异步的 _run_ingest 协程，直到它执行完毕
+    asyncio.run(_run_ingest(document_id, task_id))
+
+
+# =====================================================================
+# 函数作用：增量重建的“同步入口”。
+# 作用和上面完全一样，只是调用的底层业务逻辑变成了 _run_reindex。
+# =====================================================================
+def run_reindex_sync(document_id: UUID, task_id: UUID) -> None:
+    # 运行异步的 _run_reindex 协程，直到它执行完毕
+    asyncio.run(_run_reindex(document_id, task_id))

@@ -39,7 +39,6 @@ async def upload_document(
         _rate_limit: RateLimiter,
         admin: CurrentAdmin,
         session: DbSession,
-        background_tasks: BackgroundTasks,
         # File(...) 表示这是一个必填的文件上传字段，并附带了接口文档的描述
         file: UploadFile = File(..., description="待上传文档 (PDF / DOCX / Markdown / HTML)"),
         permission_tags: str | None = Form(default=None,description='JSON 数组字符串，例如 ["public","hr"]；空 / 不传视为公开',),
@@ -71,7 +70,7 @@ async def upload_document(
 
     # 调用服务层执行上传逻辑。注意这里将 background_tasks 传了进去，
     # 服务层在处理完落库后，会将耗时的解析任务推入后台执行。
-    document = await service.upload(file, background_tasks, created_by=admin.id, permission_tags=tags)
+    document = await service.upload(file, created_by=admin.id, permission_tags=tags)
 
     # 将 SQLAlchemy 的 ORM 对象（document）验证并转换为 Pydantic 响应模型（DocumentRead）
     # Pydantic V2 推荐使用 model_validate 替代 V1 的 from_orm
@@ -145,7 +144,7 @@ async def delete_document(_: CurrentAdmin, document_id: UUID, session: DbSession
 
 
 @router.post("/{document_id}/retry", response_model=DocumentRead, operation_id="retryDocument")
-async def retry_document(_: CurrentAdmin, document_id: UUID, session: DbSession, background_tasks: BackgroundTasks,) -> DocumentRead:
+async def retry_document(_: CurrentAdmin, document_id: UUID, session: DbSession,) -> DocumentRead:
     """
     重试失败（FAILED 状态）的文档解析入库任务。
     """
@@ -154,7 +153,7 @@ async def retry_document(_: CurrentAdmin, document_id: UUID, session: DbSession,
     # 调用服务层重试逻辑。
     # 传入 background_tasks 是因为重试通常意味着要重新跑一遍耗时的解析任务，
     # 服务层会将任务推入后台，并立刻返回重置状态后的文档对象。
-    document = await service.retry(document_id, background_tasks)
+    document = await service.retry(document_id)
 
     # 将返回的 ORM 对象转换为 Pydantic 模型返回给前端
     return DocumentRead.model_validate(document)
