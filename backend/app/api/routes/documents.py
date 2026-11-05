@@ -21,7 +21,11 @@ from app.api.schemas.documents import (
     DocumentStatusValue, DocumentRenameRequest,
 )
 from app.db.models import DocumentStatus
-from app.services.document_service import DocumentService, _to_document_read
+from app.services.document_service import (
+    DocumentService,
+    _to_document_read,
+    _to_document_reads,
+)
 
 
 def _viewer_tags(user) -> list[str] | None:
@@ -104,7 +108,7 @@ async def list_documents(
     # 组装并返回分页响应模型
     return DocumentListResponse(
         # 使用列表推导式，将查询出来的 ORM 对象列表批量转换为 Pydantic 模型列表
-        items=[await _to_document_read(d, service) for d in items],
+        items=await _to_document_reads(items, service),
         total=total,
         page=page,
         page_size=page_size,

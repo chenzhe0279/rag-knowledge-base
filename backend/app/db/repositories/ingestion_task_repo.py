@@ -3,7 +3,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import IngestionTask, IngestionTaskStatus, IngestionTaskType
+from collections.abc import Sequence
 
+from sqlalchemy.dialects.postgresql import distinct_on
 
 # =====================================================================
 # 类作用：文档入库任务（IngestionTask）的数据库仓储层。
@@ -51,6 +53,40 @@ class IngestionTaskRepository:
         )
         # 执行查询并返回单个对象（查不到则返回 None）
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+
+    # =====================================================================
+    # 方法作用：批量查询「每个文档最近一次」的任务，列表页用，避免 N+1。
+    # 返回 {document_id: IngestionTask}，没有任务的文档不会出现在字典里。
+    # =====================================================================
+    async def get_latest_by_documents(self, document_ids: Sequence[UUID]) -> dict[UUID, IngestionTask]:
+        """一次 SQL 取回多篇文档各自的最新一条任务（PostgreSQL DISTINCT ON）。
+
+        注意事项：
+        - DISTINCT ON 的排序列必须放在 ORDER BY 最前面，否则 PostgreSQL 报错；
+        - created_at 相同（同一事务里连着建两条）时用 id 兜底，保证“最新”是确定的；
+        - document_ids 为空时直接返回，不打数据库。
+        """
+        if not document_ids:
+            return {}
+
+        stmt = (
+            select(IngestionTask)
+            # 只查当前页这几篇文档的任务
+            .where(IngestionTask.document_id.in_(list(document_ids)))
+            # 每个 document_id 内按“最新”排序；document_id 放第一位是 DISTINCT ON 的硬性要求
+            .order_by(
+                IngestionTask.document_id,
+                IngestionTask.created_at.desc(),
+                IngestionTask.id.desc(),
+            )
+            # SQLAlchemy 2.1 里等价于 SELECT DISTINCT ON (document_id)
+            .ext(distinct_on(IngestionTask.document_id))
+        )
+
+        tasks = (await self.session.execute(stmt)).scalars().all()
+        # 组装成字典，调用方可以 O(1) 取到某篇文档的最新任务
+        return {task.document_id: task for task in tasks}
 
     # =====================================================================
     # 方法作用：将任务状态标记为“执行中（RUNNING）”，并记录开始时间。
