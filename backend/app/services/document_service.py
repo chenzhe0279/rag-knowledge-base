@@ -2,6 +2,8 @@ import hashlib
 from pathlib import PurePath
 from typing import Sequence
 from uuid import UUID
+
+from app.api.schemas.documents import DocumentRead, IngestionTaskRead
 from app.ingestion.tasks import ingest_document_task
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -614,3 +616,33 @@ class DocumentService:
     # =====================================================================
     async def get_latest_task(self, document_id: UUID) -> IngestionTask | None:
         return await self.task_repo.get_latest_by_document(document_id)
+
+
+
+# =====================================================================
+# 函数作用：将数据库的 Document 实体，组装并转换为前端需要的 DocumentRead 响应模型。
+# 【核心亮点】自动附加了最新一次的任务状态（latest_task），前端拿到后可以直接画进度条。
+# =====================================================================
+async def _to_document_read(document: Document, service: DocumentService) -> DocumentRead:
+    """组装 DocumentRead：附带 latest_task，前端轮询时直接展示任务进度卡片。"""
+
+    # 1. 查库：去数据库里找这篇文档最近一次的执行任务（比如正在解析或已失败的任务）
+    latest = await service.get_latest_task(document.id)
+
+    # 2. 组装并校验数据：
+    return DocumentRead.model_validate(
+        {
+            # 【高阶语法解析】这里使用了一个字典推导式 + 双星号(**)解包。
+            # 它的作用是：遍历 document 表的所有列（c.name），把列名和对应的值取出来（getattr），
+            # 自动组装成一个完整的字典。例如：{"id": "...", "name": "xxx.pdf", "status": "ready", ...}。
+            # 这样写的好处是，以后如果在 Document 模型里加了新字段，这里一行代码都不用改，会自动同步。
+            **{c.name: getattr(document, c.name) for c in document.__table__.columns},
+
+            # 附加刚刚查出来的最新任务。
+            # 如果 latest 存在，就用 IngestionTaskRead 模型校验并转换它；
+            # 如果是 None（刚上传还没建任务），就返回 None。
+            "latest_task": IngestionTaskRead.model_validate(latest)
+            if latest is not None
+            else None,
+        }
+    )

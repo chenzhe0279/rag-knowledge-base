@@ -8,6 +8,52 @@ from pydantic import BaseModel, ConfigDict, Field
 # 生成精确的字面量联合类型，而不是宽 string
 # 作用：限制前端传入或后端返回的 status 只能是这五个固定的字符串之一，防止非法状态
 DocumentStatusValue = Literal["uploading", "parsing", "indexing", "ready", "failed"]
+# 定义任务类型的字面量类型，限制只能传这两个字符串
+IngestionTaskTypeValue = Literal["ingest", "reindex"]
+# 定义任务状态的字面量类型，限制只能传这四种状态
+IngestionTaskStatusValue = Literal["pending", "running", "success", "failed"]
+
+
+# =====================================================================
+# 类作用：单条入库任务信息的响应模型（Schema）。
+# 用于前端文档详情页渲染「最近一次任务」的卡片（展示进度条、状态、报错等）。
+# =====================================================================
+class IngestionTaskRead(BaseModel):
+    """单条入库任务快照（详情页「最近一次任务」卡片用）。"""
+
+    # 允许直接从 SQLAlchemy 的 ORM 对象读取数据（自动映射属性）
+    model_config = ConfigDict(from_attributes=True)
+
+    # 任务唯一 ID
+    id: UUID
+
+    # 任务类型（首次入库 ingest / 增量重建 reindex）
+    task_type: IngestionTaskTypeValue
+
+    # 当前状态（排队中 / 执行中 / 成功 / 失败）
+    status: IngestionTaskStatusValue
+
+    # 任务失败重试的次数
+    retry_count: int
+
+    # 如果任务失败，这里会带有具体的错误原因（可能为空，所以默认 None）
+    error_message: str | None = None
+
+    # 进度总数（比如这篇文档被切分成了 100 个 chunk，这里就是 100）
+    progress_total: int
+
+    # 当前已完成的进度（已经成功算完了多少个 chunk 的向量）
+    progress_done: int
+
+    # 任务真正开始执行的时间（排队期间为 None，所以允许为空）
+    started_at: datetime | None = None
+
+    # 任务执行结束的时间（还在跑的时候为 None，允许为空）
+    finished_at: datetime | None = None
+
+    # 任务创建（被扔进队列）的时间。只要记录存在，这个时间必定有，所以不需要 None
+    created_at: datetime
+
 
 
 class DocumentRead(BaseModel):
@@ -27,6 +73,12 @@ class DocumentRead(BaseModel):
     thumbnail_url: str | None = None  # 缩略图地址；没有则为 None
     status: DocumentStatusValue  # 当前处理状态（强类型约束）
     error_message: str | None = None  # 错误信息（可选，默认为 None）
+    # 每次 reindex 成功 +1，列表与详情都展示
+    # 文档的版本号。初始值为 1，每次触发重新索引并成功后，后端会将其递增，前端可以据此向用户提示“内容已更新”。
+    version: int = 1
+    # 最近一次入库任务进度，前端轮询时展示状态卡片
+    # 嵌套了刚才定义的 IngestionTaskRead 模型。如果文档正在处理，前端可以通过这个字段拿到进度条数据；如果从未处理过，则为 None。
+    latest_task: IngestionTaskRead | None = None
     # 空数组视为"公开"；非空数组与用户有效权限标签做重叠匹配
     permission_tags: list[str] = Field(default_factory=list)
     # 上传者 user_id；用户被硬删后置 None
@@ -176,3 +228,5 @@ class DocumentRenameRequest(BaseModel):  # 重命名请求体
         max_length=255,  # 最多 255 个字符
         description="新的文件名，必须保留原扩展名",  # Swagger 说明
     )
+
+

@@ -3,7 +3,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, Query, Response, UploadFile, Header, Form
-from app.api.deps import CurrentAdmin, CurrentUser
+from app.api.deps import CurrentAdmin, CurrentUser, RateLimited
 from app.core.rate_limiter import RateLimiter
 from app.services.permission_service import (
     compute_user_permission_tags,
@@ -21,7 +21,7 @@ from app.api.schemas.documents import (
     DocumentStatusValue, DocumentRenameRequest,
 )
 from app.db.models import DocumentStatus
-from app.services.document_service import DocumentService
+from app.services.document_service import DocumentService, _to_document_read
 
 
 def _viewer_tags(user) -> list[str] | None:
@@ -74,7 +74,7 @@ async def upload_document(
 
     # 将 SQLAlchemy 的 ORM 对象（document）验证并转换为 Pydantic 响应模型（DocumentRead）
     # Pydantic V2 推荐使用 model_validate 替代 V1 的 from_orm
-    return DocumentRead.model_validate(document)
+    return await _to_document_read(document, service)
 
 
 @router.get("", response_model=DocumentListResponse, operation_id="listDocuments")
@@ -104,7 +104,7 @@ async def list_documents(
     # 组装并返回分页响应模型
     return DocumentListResponse(
         # 使用列表推导式，将查询出来的 ORM 对象列表批量转换为 Pydantic 模型列表
-        items=[DocumentRead.model_validate(d) for d in items],
+        items=[await _to_document_read(d, service) for d in items],
         total=total,
         page=page,
         page_size=page_size,
@@ -125,7 +125,7 @@ async def get_document(document_id: UUID, user: CurrentUser, session: DbSession)
     document = await service.get(document_id, permission_tags=_viewer_tags(user))
 
     # 将数据库 ORM 对象转换为 Pydantic 响应模型，过滤敏感字段并格式化数据
-    return DocumentRead.model_validate(document)
+    return await _to_document_read(document, service)
 
 
 @router.delete("/{document_id}", status_code=204, operation_id="deleteDocument")
@@ -156,7 +156,7 @@ async def retry_document(_: CurrentAdmin, document_id: UUID, session: DbSession,
     document = await service.retry(document_id)
 
     # 将返回的 ORM 对象转换为 Pydantic 模型返回给前端
-    return DocumentRead.model_validate(document)
+    return await _to_document_read(document, service)
 
 
 # 定义一个常量，专门用来匹配 DOCX 文件的 MIME 类型。
@@ -331,7 +331,7 @@ async def get_document_thumbnail(document_id: UUID,  session: DbSession) -> Resp
 async def rename_document(_: CurrentAdmin, document_id: UUID, payload: DocumentRenameRequest, session: DbSession, ) -> DocumentRead:  # 返回类型
     service = DocumentService(session)  # 服务
     document = await service.rename(document_id, payload.name)  # 处理
-    return DocumentRead.model_validate(document)  # 转 Pydantic
+    return await _to_document_read(document, service) # 转 Pydantic
 
 
 @router.put( "/{document_id}/thumbnail",response_model=DocumentRead,operation_id="uploadDocumentThumbnail")
@@ -346,7 +346,7 @@ async def upload_document_thumbnail(
 ) -> DocumentRead:  # 返回 Pydantic 响应模型
     service = DocumentService(session)  # 创建业务服务
     document = await service.upload_thumbnail(document_id, file)  # 处理、上传 COS、写回数据库
-    return DocumentRead.model_validate(document)  # ORM 对象转 Pydantic 响应
+    return await _to_document_read(document, service) # ORM 对象转 Pydantic 响应
 
 
 # =====================================================================
@@ -365,4 +365,25 @@ async def update_permission_tags(_: CurrentAdmin, document_id: UUID, session: Db
     )
 
     # 将更新后的数据库 ORM 对象转换为 Pydantic 响应模型并返回
-    return DocumentRead.model_validate(document)
+    return await _to_document_read(document, service)
+
+
+# =====================================================================
+# 接口作用：上传新版本文档，触发文档的增量重建（Reindex）。
+# 【权限控制】强制要求管理员权限，并加入了限流保护（防止高频恶意刷接口）。
+# =====================================================================
+@router.post("/{document_id}/reindex", response_model=DocumentRead, operation_id="reindexDocument",)
+async def reindex_document(_: CurrentAdmin, _rate_limit: RateLimited, document_id: UUID, session: DbSession,
+        file: UploadFile = File(
+            ..., description="新版本文件（MIME 必须与原文档一致）"
+        ),
+) -> DocumentRead:
+    """上传新版本文件，触发按 chunk_hash 对齐的增量重建。"""
+    # 实例化文档业务服务层
+    service = DocumentService(session)
+
+    # 调用服务层核心逻辑
+    document = await service.reindex(document_id, file)
+
+    # 将更新后的 ORM 对象转换为前端需要的 Pydantic 响应模型，并返回
+    return await _to_document_read(document, service)
