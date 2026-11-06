@@ -5,14 +5,13 @@ from app.db.models import DocumentChunk, DocumentStatus
 from app.db.repositories.chunk_repo import DocumentChunkRepository
 from app.db.repositories.document_repo import DocumentRepository
 from app.db.repositories.ingestion_task_repo import IngestionTaskRepository
-from app.db.session import AsyncSessionLocal
 from app.ingestion import embedder, parser, splitter
 from app.retrieval.tokenizer import segment
 from app.storage.file_service import get_file_service
 import asyncio
 from pathlib import Path
 from app.ingestion.thumbnail import generate_thumbnail
-
+from app.db.session import AsyncSessionLocal, engine
 logger = get_logger(__name__)
 
 
@@ -314,9 +313,10 @@ async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
 
     # 1. 记录开始日志，并把 Celery 任务状态标记为“运行中”
     logger.info("ingest start: document_id=%s task_id=%s", document_id, task_id)
-    await _mark_task(task_id, running=True)
-
     try:
+        # 标记 running 也放进 try：即使连数据库都失败，也要走 except 把任务置为 failed
+        await _mark_task(task_id, running=True)
+
         # ================= 阶段 1：获取文档信息 =================
         # 开启一个独立的数据库会话
         async with AsyncSessionLocal() as session:
@@ -440,9 +440,11 @@ async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
     """
     # 1. 记录开始日志并标记任务为运行中
     logger.info("reindex start: document_id=%s task_id=%s", document_id, task_id)
-    await _mark_task(task_id, running=True)
 
     try:
+        # 标记 running 也放进 try：早期异常也要走 except 把任务置为 failed
+        await _mark_task(task_id, running=True)
+
         # ================= 阶段 1：获取文档并下载 =================
         async with AsyncSessionLocal() as session:
             document = await DocumentRepository(session).get_by_id(document_id)
@@ -703,15 +705,39 @@ async def _increment_task_progress(task_id: UUID, delta: int) -> None:
 # 因为 Celery Worker 是同步进程，而底层业务逻辑（_run_ingest）是异步的，
 # 所以用 asyncio.run() 启动一个独立的事件循环来执行它。
 # =====================================================================
-def run_ingest_sync(document_id: UUID, task_id: UUID) -> None:
-    # 运行异步的 _run_ingest 协程，直到它执行完毕
-    asyncio.run(_run_ingest(document_id, task_id))
+async def _run_ingest_entry(document_id: UUID, task_id: UUID) -> None:
+    try:
+     # 运行异步的 _run_ingest 协程，直到它执行完毕
+     await _run_ingest(document_id, task_id)
+    finally:
+        # 关键：asyncio.run() 每个任务都会新建并关闭事件循环，
+        # 而 engine 是进程级单例，池里缓存的 asyncpg 连接还绑定在旧 loop 上。
+        # 在同一个 loop 里 dispose，保证下一个任务拿到全新连接。
+        await engine.dispose()
 
 
 # =====================================================================
 # 函数作用：增量重建的“同步入口”。
 # 作用和上面完全一样，只是调用的底层业务逻辑变成了 _run_reindex。
 # =====================================================================
+async def _run_reindex_entry(document_id: UUID, task_id: UUID) -> None:
+    try:
+     # 运行异步的 _run_reindex 协程，直到它执行完毕
+     await _run_reindex(document_id, task_id)
+    finally:
+        # 关闭并销毁数据库引擎（Engine）持有的所有连接池。
+        # 这是一个异步操作，因为需要等待数据库服务器确认 TCP 连接断开。
+        await engine.dispose()
+
+
+# =====================================================================
+# 函数作用：Celery 的同步入口。
+# worker 是同步进程，任务函数直接调这两个函数；每次任务用独立的事件循环，
+# 在循环关闭前 dispose 连接池，避免下一个任务复用绑定在旧 loop 上的连接。
+# =====================================================================
+def run_ingest_sync(document_id: UUID, task_id: UUID) -> None:
+    asyncio.run(_run_ingest_entry(document_id, task_id))
+
+
 def run_reindex_sync(document_id: UUID, task_id: UUID) -> None:
-    # 运行异步的 _run_reindex 协程，直到它执行完毕
-    asyncio.run(_run_reindex(document_id, task_id))
+    asyncio.run(_run_reindex_entry(document_id, task_id))
