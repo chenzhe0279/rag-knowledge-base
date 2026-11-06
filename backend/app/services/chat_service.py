@@ -27,7 +27,7 @@ from app.workflows.nodes import (
 import time
 from dataclasses import dataclass, field
 from app.workflows.rag_state import RAGState
-from app.services.semantic_cache_service import SemanticCacheService, get_semantic_cache, CachedAnswer
+from app.services.semantic_cache_service import  get_semantic_cache, CachedAnswer
 
 # 获取当前模块的日志记录器，用于打印该文件产生的运行日志
 logger = get_logger(__name__)

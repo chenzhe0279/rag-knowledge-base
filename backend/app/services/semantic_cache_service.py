@@ -74,24 +74,33 @@ class CachedAnswer:
 class SemanticCacheService:
     # 初始化方法
     def __init__(self) -> None:
-        # 实例化 RedisVL 的 SemanticCache 核心对象
-        self._cache = SemanticCache(
-            # 缓存索引的名称
-            name=_CACHE_NAME,
-            # 从配置读取 Redis 连接 URL
-            redis_url=settings.redis_url,
-            # RediSearch 用「余弦距离 = 1 - 余弦相似度」做 KNN 排序；阈值同步转换。
-            # 假设配置的相似度是 0.92，那么距离阈值就是 1.0 - 0.92 = 0.08。距离小于 0.08 才算命中。
-            distance_threshold=1.0 - settings.semantic_cache_min_similarity,
-            # 缓存过期时间（秒）
-            ttl=settings.semantic_cache_ttl_seconds,
-            # 占位向量化函数。仅用于建索引时告诉 RedisVL 向量维度，主链路传入的已经是算好的向量了
-            vectorizer=CustomVectorizer(_stub_embed),  # pyright: ignore[reportCallIssue]
-            # 声明可过滤的字段：权限范围。类型为 Tag，用于后续的精确匹配隔离
-            filterable_fields=[{"name": _SCOPE_FIELD, "type": "tag"}],
-            # 如果索引已存在，不覆盖（防止每次启动重建，丢失已有缓存）
-            overwrite=False,
-        )
+        # 【加固】缓存初始化失败（Redis 缺 RediSearch / 连不上）只禁用缓存，
+        # 绝不把异常抛给问答主链路
+        self._cache: SemanticCache | None = None
+        try:
+         # 实例化 RedisVL 的 SemanticCache 核心对象
+         self._cache = SemanticCache(
+             # 缓存索引的名称
+             name=_CACHE_NAME,
+             # 从配置读取 Redis 连接 URL
+             redis_url=settings.redis_url,
+             # RediSearch 用「余弦距离 = 1 - 余弦相似度」做 KNN 排序；阈值同步转换。
+             # 假设配置的相似度是 0.92，那么距离阈值就是 1.0 - 0.92 = 0.08。距离小于 0.08 才算命中。
+             distance_threshold=1.0 - settings.semantic_cache_min_similarity,
+             # 缓存过期时间（秒）
+             ttl=settings.semantic_cache_ttl_seconds,
+             # 占位向量化函数。仅用于建索引时告诉 RedisVL 向量维度，主链路传入的已经是算好的向量了
+             vectorizer=CustomVectorizer(_stub_embed),  # pyright: ignore[reportCallIssue]
+             # 声明可过滤的字段：权限范围。类型为 Tag，用于后续的精确匹配隔离
+             filterable_fields=[{"name": _SCOPE_FIELD, "type": "tag"}],
+             # 如果索引已存在，不覆盖（防止每次启动重建，丢失已有缓存）
+             overwrite=False,
+         )
+        except Exception:
+            logger.exception(
+                "semantic cache init failed; cache disabled "
+                "(Redis 需支持 RediSearch FT.* 命令)"
+            )
 
     # =====================================================================
     # 方法作用：查询语义缓存。
@@ -99,6 +108,9 @@ class SemanticCacheService:
     # =====================================================================
     async def lookup(self, query_embedding: list[float], permission_scope: list[str],) -> CachedAnswer | None:
         """Redis 内 KNN 查询：相似度阈值 + 权限范围 Tag 同时满足才返回。"""
+        if self._cache is None:  # 缓存不可用时直接当未命中
+            return None
+
         # 1. 将用户的权限标签列表计算成固定的哈希值（作为 Tag 值）
         scope = _scope_key(permission_scope)
 
@@ -146,6 +158,8 @@ class SemanticCacheService:
     # 方法作用：将新的问答结果写入语义缓存。
     # =====================================================================
     async def save(self, *, question: str, query_embedding: list[float], answer: str, citations: list[dict], permission_scope: list[str],) -> None:
+        if self._cache is None:  # 缓存不可用时直接当未命中
+            return
         try:
             # 调用 RedisVL 异步写入方法
             await self._cache.astore(
