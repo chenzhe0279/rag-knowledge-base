@@ -638,6 +638,10 @@ def _document_read_from(document: Document, latest: IngestionTask | None) -> Doc
             # 遍历 Document 表的所有列，自动同步字段；以后加列这里不用改
             **{c.name: getattr(document, c.name) for c in document.__table__.columns},
 
+            # thumbnail_url 是 Python @property，不在表列里，必须显式补上，
+            # 否则响应里永远是 null，前端只能显示 PDF/MD 占位图
+            "thumbnail_url": document.thumbnail_url,
+
             # 最新任务：有就转换，没有（刚上传还没建任务）就返回 None
             "latest_task": IngestionTaskRead.model_validate(latest)
             if latest is not None
