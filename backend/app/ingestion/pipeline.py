@@ -371,6 +371,10 @@ async def _run_ingest(document_id: UUID, task_id: UUID) -> None:
             # 提交事务，将数据落盘
             await session.commit()
 
+        # 【修复点】首次入库同样要生成缩略图：
+        # 只处理 PDF，非 PDF 直接 return；失败只打 warning，不影响主流程
+        await _attach_thumbnail(document_id, filename, content)
+
         # ================= 阶段 6：完成收尾 =================
         # 将文档状态更新为“就绪（READY）”，并清空历史错误信息
         await _set_status(document_id, DocumentStatus.READY, error_message=None)
@@ -402,6 +406,9 @@ def _make_chunk(document_id: UUID, chunk: LangChainDocument, embedding: list[flo
         document_id=document_id,
         # 2. 提取文本正文内容
         content=chunk.page_content,
+        # 【修复点】content_tsv 是生成列，只认 content_tokens；
+        # 不写这里，新 chunk 的全文索引就是空的，关键词检索永远 0 命中
+        content_tokens=segment(chunk.page_content),
         # 3. 存入对应的高维向量
         embedding=embedding,
 
@@ -485,6 +492,10 @@ async def _run_reindex(document_id: UUID, task_id: UUID) -> None:
             if doc is not None:
                 doc.version += 1
             await session.commit()
+
+        # ================= 阶段 5.5：刷新缩略图 =================
+        # 文档换了新版本，首屏预览也要跟着更新（非 PDF 自动跳过）
+        await _attach_thumbnail(document_id, filename, content)
 
         # ================= 阶段 6：完成收尾 =================
         await _set_status(document_id, DocumentStatus.READY, error_message=None)

@@ -106,7 +106,7 @@ class ChatService:
 
         # 校验会话存在用 service 自带 session；流式跑用独立 session
         # 前置校验：检查会话是否存在。如果不存在，这里会直接抛出 404 异常，阻断后续流式输出。
-        await self.get_conversation(conversation_id, user_id=current_user.id)
+        await self.get_conversation(conversation_id, current_user=current_user)
         # 将当前登录的用户对象 current_user 传进去，计算得出最终的有效权限标签列表
         permissions = compute_user_permission_tags(current_user)
         # 【核心】开启一个独立的数据库会话（Session）。
@@ -189,9 +189,12 @@ class ChatService:
                 }
                 # 3. retrieve（含拒答判定）-> 先把引用发给前端，让参考资料面板立刻可见
                 # 调用 retrieve 节点，去向量数据库检索相关文本块，并判断是否需要拒答
-                state.update(await retrieve(state))
+                # state.update(await retrieve(state))
 
-                # 1. 先准备一个空列表，用于存放最终结果
+                # 3. 引用直接取自图执行后的最终状态：
+                #    retrieve -> observe -> rerank 已把 retrieved_chunks 覆盖为
+                #    “精排后的 Top-K（默认 5 条，带 rerank_score）”。
+                #    这里不能再调 retrieve，否则会把精排结果覆盖回 RRF 原始召回（默认 20 条）。
                 citations_payload = []
 
                 # 2. 判断系统是否触发了“拒答（refused）”
